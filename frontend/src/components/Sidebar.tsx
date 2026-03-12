@@ -14,7 +14,7 @@ interface NavItem {
 
 const toolsNav: NavItem[] = [
   { id: 'book-matcher', label: 'Book Matcher', icon: '\u{1F50D}' },
-  { id: 'photo-import', label: 'Photo Import', icon: '\u{1F4F7}', badge: 'Soon' },
+  { id: 'photo-import', label: 'Photo Import', icon: '\u{1F4F7}' },
 ];
 
 const dataNav: NavItem[] = [
@@ -22,7 +22,7 @@ const dataNav: NavItem[] = [
 ];
 
 const aiNav: NavItem[] = [
-  { id: 'agent-chat', label: 'Agent Chat', icon: '\u{1F4AC}', badge: 'Soon' },
+  { id: 'agent-chat', label: 'Agent Chat', icon: '\u{1F4AC}' },
 ];
 
 export default function Sidebar({ activePage, onNavigate }: SidebarProps) {

@@ -1,6 +1,8 @@
 import { useState } from 'react';
 import Layout from './components/Layout';
 import BookMatcher from './pages/BookMatcher';
+import AgentChat from './pages/AgentChat';
+import PhotoImport from './pages/PhotoImport';
 import Placeholder from './pages/Placeholder';
 
 const pages: Record<string, { title: string; subtitle: string }> = {
@@ -34,18 +36,7 @@ export default function App() {
       subtitle={page.subtitle}
     >
       {activePage === 'book-matcher' && <BookMatcher />}
-      {activePage === 'photo-import' && (
-        <Placeholder
-          icon={'\u{1F4F7}'}
-          title="Photo Import"
-          description="Take a photo of a bookshelf or a stack of books, and AI will identify each title automatically."
-          features={[
-            'Vision AI for spine and cover recognition',
-            'Batch processing for large collections',
-            'Automatic metadata lookup after identification',
-          ]}
-        />
-      )}
+      {activePage === 'photo-import' && <PhotoImport />}
       {activePage === 'database' && (
         <Placeholder
           icon={'\u{1F4BE}'}
@@ -58,18 +49,7 @@ export default function App() {
           ]}
         />
       )}
-      {activePage === 'agent-chat' && (
-        <Placeholder
-          icon={'\u{1F4AC}'}
-          title="Agent Chat"
-          description="Chat with the AI agent to catalog books, ask questions about your collection, or get recommendations."
-          features={[
-            'Natural language queries about your catalog',
-            'Agent-driven book research and classification',
-            'Database operations via conversation',
-          ]}
-        />
-      )}
+      {activePage === 'agent-chat' && <AgentChat />}
     </Layout>
   );
 }

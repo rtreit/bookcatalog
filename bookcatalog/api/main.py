@@ -3,7 +3,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from .routers import books
+from .routers import agents, books
 
 app = FastAPI(
     title="BookCatalog API",
@@ -20,6 +20,7 @@ app.add_middleware(
 )
 
 app.include_router(books.router, prefix="/api/books", tags=["books"])
+app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
 
 
 @app.get("/api/health")
