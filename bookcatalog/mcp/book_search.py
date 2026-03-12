@@ -7,7 +7,7 @@ Usage:
     uv run python -m bookcatalog.mcp.book_search
 """
 
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
 
 from bookcatalog.research.local_search import LocalBookSearch
 

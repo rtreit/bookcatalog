@@ -11,8 +11,8 @@ import logging
 from pathlib import Path
 from typing import Any
 
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 
 from .config import OPENAI_API_KEY, VISION_MODEL, get_mcp_server_config
 
@@ -119,14 +119,13 @@ async def _invoke_vision_agent(
     media_type: str,
 ) -> list[dict[str, Any]]:
     """Create and invoke the vision agent."""
-    agent = create_react_agent(model, tools)
+    agent = create_agent(model, tools, system_prompt=SYSTEM_PROMPT)
 
     b64_image = base64.b64encode(image_data).decode("utf-8")
     image_url = f"data:{media_type};base64,{b64_image}"
 
     result = await agent.ainvoke({
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
             {
                 "role": "user",
                 "content": [

@@ -10,8 +10,8 @@ import json
 import logging
 from typing import Any
 
+from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
-from langgraph.prebuilt import create_react_agent
 
 from .config import OPENAI_API_KEY, PREPROCESSOR_MODEL, get_mcp_server_config
 
@@ -84,14 +84,13 @@ async def _invoke_agent(
     items: list[str],
 ) -> list[dict[str, Any]]:
     """Create and invoke the agent with the given tools."""
-    agent = create_react_agent(model, tools)
+    agent = create_agent(model, tools, system_prompt=SYSTEM_PROMPT)
 
     items_text = "\n".join(f"- {item}" for item in items)
     user_message = f"Classify and match the following items:\n\n{items_text}"
 
     result = await agent.ainvoke({
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ],
     })
