@@ -41,17 +41,21 @@ Write-Host "Starting BookCatalog dev servers..." -ForegroundColor Cyan
 Write-Host ""
 
 # Start FastAPI backend
+# Refresh PATH so newly installed tools (uv) are found
 Write-Host "[Backend]  Starting FastAPI on http://localhost:8000" -ForegroundColor Green
+$refreshAndRunBackend = '$env:Path = [System.Environment]::GetEnvironmentVariable(\"Path\", \"Machine\") + \";\" + [System.Environment]::GetEnvironmentVariable(\"Path\", \"User\"); uv run uvicorn bookcatalog.api.main:app --port 8000 --reload'
 $backend = Start-Process pwsh `
-    -ArgumentList "-NoProfile", "-Command", "uv run uvicorn bookcatalog.api.main:app --port 8000 --reload" `
+    -ArgumentList "-NoProfile", "-Command", $refreshAndRunBackend `
     -WorkingDirectory $root `
     -PassThru `
     -WindowStyle Minimized
 
 # Start React frontend dev server
+# Refresh PATH so newly installed tools (npm, node) are found
 Write-Host "[Frontend] Starting Vite on http://localhost:5173" -ForegroundColor Green
+$refreshAndRun = '$env:Path = [System.Environment]::GetEnvironmentVariable(\"Path\", \"Machine\") + \";\" + [System.Environment]::GetEnvironmentVariable(\"Path\", \"User\"); npm run dev'
 $frontend = Start-Process pwsh `
-    -ArgumentList "-NoProfile", "-Command", "npm run dev" `
+    -ArgumentList "-NoProfile", "-Command", $refreshAndRun `
     -WorkingDirectory (Join-Path $root "frontend") `
     -PassThru `
     -WindowStyle Minimized
