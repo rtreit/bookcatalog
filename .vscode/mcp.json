@@ -1,13 +1,5 @@
 {
   "servers": {
-    "github": {
-      "type": "stdio",
-      "command": "npx",
-      "args": [
-        "-y",
-        "@anthropic-ai/github-mcp-server@latest"
-      ]
-    },
     "microsoft-learn": {
       "type": "http",
       "url": "https://learn.microsoft.com/api/mcp"
