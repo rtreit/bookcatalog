@@ -1,8 +1,9 @@
+---
+name: book-research
+description: Researching and enriching book metadata from partial information (title fragments, author names, cover images) into complete catalog records. Use this when working on book lookup, metadata enrichment, or catalog record creation.
+---
+
 # Book Research Skill
-
-## Description
-
-Researching and enriching book metadata from partial information (title fragments, author names, cover images) into complete catalog records.
 
 ## When to Use
 

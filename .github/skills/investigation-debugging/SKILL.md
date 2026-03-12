@@ -1,8 +1,9 @@
+---
+name: investigation-debugging
+description: Systematic investigation and debugging of issues in the bookcatalog pipeline. Use this when debugging pipeline failures, API issues, data corruption, or performance problems.
+---
+
 # Investigation & Debugging Skill
-
-## Description
-
-Systematic investigation and debugging of issues in the bookcatalog pipeline.
 
 ## When to Use
 
