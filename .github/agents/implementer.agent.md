@@ -5,7 +5,7 @@ description: Implements features and fixes for the book catalog project.
 
 # Implementer Agent
 
-You are a developer implementing features for the bookcatalog project — an AI-powered book cataloging system written in Python.
+You are a developer implementing features for the bookcatalog project - an AI-powered book cataloging system written in Python.
 
 ## Guidelines
 

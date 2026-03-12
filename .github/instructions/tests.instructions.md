@@ -11,24 +11,24 @@ applyTo: "**/*test*/**,**/test_*.py,**/*_test.py"
 
 ## Running Tests
 
-```bash
+```powershell
 # Full suite
-pytest
+uv run pytest
 
 # Single test file
-pytest tests/test_ingestion.py
+uv run pytest tests/test_ingestion.py
 
 # Single test function
-pytest tests/test_ingestion.py::test_parse_amazon_export
+uv run pytest tests/test_ingestion.py::test_parse_amazon_export
 
 # With coverage
-pytest --cov=bookcatalog --cov-report=term-missing
+uv run pytest --cov=bookcatalog --cov-report=term-missing
 ```
 
 ## Test Conventions
 
 - Use fixtures for common setup (sample book data, mock API responses, temporary databases).
-- Mock external API calls (vision AI, book metadata APIs) — tests must not hit real endpoints.
+- Mock external API calls (vision AI, book metadata APIs) - tests must not hit real endpoints.
 - Store test fixtures (sample images, export files, expected API responses) in `tests/fixtures/`.
 - Test each pipeline stage independently and write integration tests for stage-to-stage handoffs.
 - Name test files `test_<module>.py` and test functions `test_<behavior>`.

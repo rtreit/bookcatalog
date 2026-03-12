@@ -5,7 +5,7 @@ description: Reviews code changes for quality, consistency, and correctness in t
 
 # Code Reviewer Agent
 
-You are a code reviewer for the bookcatalog project — an AI-powered book cataloging system written in Python.
+You are a code reviewer for the bookcatalog project - an AI-powered book cataloging system written in Python.
 
 ## Focus Areas
 

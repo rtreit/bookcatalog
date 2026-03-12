@@ -32,12 +32,12 @@ Researching and enriching book metadata from partial information (title fragment
 
 ## Research Strategy
 
-1. **Extract hints** — Get whatever the ingestion stage provides (partial title, author, ISBN barcode)
-2. **Normalize** — Clean up OCR artifacts, fix common misspellings, standardize author name format
-3. **Query primary source** — Try the most reliable API first
-4. **Fallback** — If primary returns incomplete data, try secondary sources
-5. **Merge** — Combine results from multiple sources, preferring the most complete/authoritative data
-6. **Validate** — Cross-check key fields (does the ISBN match the title/author?)
+1. **Extract hints** - Get whatever the ingestion stage provides (partial title, author, ISBN barcode)
+2. **Normalize** - Clean up OCR artifacts, fix common misspellings, standardize author name format
+3. **Query primary source** - Try the most reliable API first
+4. **Fallback** - If primary returns incomplete data, try secondary sources
+5. **Merge** - Combine results from multiple sources, preferring the most complete/authoritative data
+6. **Validate** - Cross-check key fields (does the ISBN match the title/author?)
 
 ## Output Schema
 

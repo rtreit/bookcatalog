@@ -2,14 +2,14 @@
   "hooks": {
     "pre-tool": [
       {
-        "script": ".github/hooks/scripts/pre-tool-policy.sh",
+        "script": ".github/hooks/scripts/pre-tool-policy.ps1",
         "tools": ["edit", "create"],
         "description": "Validates file changes against project policies before they are applied."
       }
     ],
     "post-tool": [
       {
-        "script": ".github/hooks/scripts/post-commit-lint.sh",
+        "script": ".github/hooks/scripts/post-commit-lint.ps1",
         "tools": ["powershell"],
         "description": "Runs linting checks after shell commands that may have modified source files."
       }

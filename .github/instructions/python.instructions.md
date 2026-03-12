@@ -7,7 +7,7 @@ applyTo: "**/*.py"
 ## Style & Formatting
 
 - Use `ruff` for linting and formatting.
-- Target Python 3.11+.
+- Target Python 3.13+.
 - Use type hints on all function signatures (parameters and return types).
 - Prefer `pathlib.Path` over `os.path` for file operations.
 
@@ -21,10 +21,10 @@ applyTo: "**/*.py"
 
 - Define custom exception classes for each pipeline stage (e.g., `IngestionError`, `ResearchError`, `StorageError`).
 - External API calls must handle timeouts, rate limits, and transient errors with retries.
-- Never silently swallow exceptions — log at minimum.
+- Never silently swallow exceptions - log at minimum.
 
 ## Dependencies
 
-- Pin dependencies in `requirements.txt` or `pyproject.toml`.
+- Always use `uv` for dependency management (`uv add`, `uv remove`, `uv sync`).
 - Use `python-dotenv` for local environment variable loading.
 - Prefer standard library where feasible; justify new dependencies.

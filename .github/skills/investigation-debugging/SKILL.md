@@ -17,17 +17,16 @@ Systematic investigation and debugging of issues in the bookcatalog pipeline.
 
 Determine which pipeline stage is involved by checking intermediate outputs:
 
-```bash
-# Run with verbose logging to see stage-by-stage output
-python -m bookcatalog --verbose --input <test-input>
+```powershell
+uv run python -m bookcatalog --verbose --input <test-input>
 ```
 
 ### 2. Test with Fixtures
 
 Use saved fixtures to eliminate external API variability:
 
-```bash
-pytest tests/ -k "test_<relevant_stage>" -v
+```powershell
+uv run pytest tests/ -k "test_<relevant_stage>" -v
 ```
 
 ### 3. Check External APIs
@@ -45,9 +44,8 @@ print(result)
 
 For storage-related issues, verify the database state directly:
 
-```bash
-# SQLite
-sqlite3 bookcatalog.db ".schema" 
+```powershell
+sqlite3 bookcatalog.db ".schema"
 sqlite3 bookcatalog.db "SELECT * FROM books ORDER BY created_at DESC LIMIT 5;"
 ```
 
