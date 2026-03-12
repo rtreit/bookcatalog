@@ -73,11 +73,11 @@ async def run_vision_agent(
     if tools is None:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        async with MultiServerMCPClient(get_mcp_server_config()) as client:
-            mcp_tools = client.get_tools()
-            return await _invoke_vision_agent(
-                model, mcp_tools, image_data, media_type
-            )
+        client = MultiServerMCPClient(get_mcp_server_config())
+        mcp_tools = await client.get_tools()
+        return await _invoke_vision_agent(
+            model, mcp_tools, image_data, media_type
+        )
     else:
         return await _invoke_vision_agent(model, tools, image_data, media_type)
 

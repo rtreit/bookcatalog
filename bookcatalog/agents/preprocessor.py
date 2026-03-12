@@ -71,9 +71,9 @@ async def run_preprocessor(
     if tools is None:
         from langchain_mcp_adapters.client import MultiServerMCPClient
 
-        async with MultiServerMCPClient(get_mcp_server_config()) as client:
-            mcp_tools = client.get_tools()
-            return await _invoke_agent(model, mcp_tools, items)
+        client = MultiServerMCPClient(get_mcp_server_config())
+        mcp_tools = await client.get_tools()
+        return await _invoke_agent(model, mcp_tools, items)
     else:
         return await _invoke_agent(model, tools, items)
 
