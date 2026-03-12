@@ -53,8 +53,24 @@ def search_books(query: str, max_results: int = 5) -> str:
         parts = [f"Title: {title}"]
         if authors:
             parts.append(f"Authors: {authors}")
+        if row.get("subtitle"):
+            parts.append(f"Subtitle: {row['subtitle']}")
         if year:
             parts.append(f"Year: {year}")
+        if row.get("description"):
+            parts.append(f"Description: {row['description'][:200]}")
+        if row.get("first_sentence"):
+            parts.append(f"First sentence: {row['first_sentence'][:200]}")
+        if row.get("subject_people"):
+            parts.append(f"People: {row['subject_people']}")
+        if row.get("subject_places"):
+            parts.append(f"Places: {row['subject_places']}")
+        if row.get("subject_times"):
+            parts.append(f"Times: {row['subject_times']}")
+        if row.get("lc_classifications"):
+            parts.append(f"LC classifications: {row['lc_classifications']}")
+        if row.get("dewey_number"):
+            parts.append(f"Dewey: {row['dewey_number']}")
         lines.append(" | ".join(parts))
 
     return "\n".join(lines)
@@ -102,6 +118,13 @@ def match_book(title: str) -> str:
     ]
     if match.first_publish_year:
         parts.append(f"Year: {match.first_publish_year}")
+    raw_doc = match.raw_doc or {}
+    if raw_doc.get("subtitle"):
+        parts.append(f"Subtitle: {raw_doc['subtitle']}")
+    if raw_doc.get("description"):
+        parts.append(f"Description: {raw_doc['description'][:200]}")
+    if raw_doc.get("first_sentence"):
+        parts.append(f"First sentence: {raw_doc['first_sentence'][:200]}")
     return " | ".join(parts)
 
 

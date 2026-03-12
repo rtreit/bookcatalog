@@ -211,3 +211,4 @@ __marimo__/
 
 # Open Library data dumps (large files, download separately)
 data/openlibrary/
+*.db

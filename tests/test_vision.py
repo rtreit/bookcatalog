@@ -1,6 +1,7 @@
 """Tests for the vision agent."""
 
 import json
+from typing import Any
 
 import pytest
 
@@ -123,3 +124,34 @@ class TestVisionAgent:
             tiny_jpeg, media_type="image/jpeg", tools=[match_book, search_books]
         )
         assert isinstance(results, list)
+
+    @pytest.mark.asyncio
+    async def test_run_vision_agent_uses_native_tools_by_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Native agent tools are loaded when no explicit tools are passed."""
+        captured: dict[str, Any] = {}
+
+        async def fake_invoke(
+            model: Any,
+            tools: list[Any],
+            image_data: bytes,
+            media_type: str,
+        ) -> list[dict[str, Any]]:
+            captured["tools"] = tools
+            captured["image_data"] = image_data
+            captured["media_type"] = media_type
+            return [{"matched_title": "Dune"}]
+
+        fake_tools = [object()]
+        monkeypatch.setattr("bookcatalog.agents.vision.ChatOpenAI", lambda **_: object())
+        monkeypatch.setattr("bookcatalog.agents.vision._invoke_vision_agent", fake_invoke)
+        monkeypatch.setattr("bookcatalog.agents.vision.get_agent_tools", lambda: fake_tools)
+
+        result = await run_vision_agent(b"image-bytes", media_type="image/png")
+
+        assert result == [{"matched_title": "Dune"}]
+        assert captured["tools"] == fake_tools
+        assert captured["image_data"] == b"image-bytes"
+        assert captured["media_type"] == "image/png"

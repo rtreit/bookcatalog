@@ -1,4 +1,4 @@
-"""Conversational book assistant backed by MCP book search tools."""
+"""Conversational book assistant backed by native local book tools."""
 
 import json
 import logging
@@ -8,7 +8,8 @@ from typing import Any, TypedDict
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 
-from .config import OPENAI_API_KEY, PREPROCESSOR_MODEL, get_mcp_server_config
+from .config import OPENAI_API_KEY, PREPROCESSOR_MODEL
+from .tools import get_agent_tools
 
 logger = logging.getLogger(__name__)
 
@@ -79,11 +80,7 @@ async def run_preprocessor(
     )
 
     if tools is None:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
-
-        client = MultiServerMCPClient(get_mcp_server_config())
-        mcp_tools = await client.get_tools()
-        return await _invoke_agent(model, mcp_tools, normalized_messages)
+        tools = get_agent_tools()
 
     return await _invoke_agent(model, tools, normalized_messages)
 

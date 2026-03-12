@@ -16,6 +16,7 @@ import sqlite3
 import sys
 import time
 from pathlib import Path
+from typing import Any
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data" / "openlibrary"
 DB_PATH = DATA_DIR / "openlibrary.db"
@@ -25,7 +26,11 @@ PROGRESS_INTERVAL = 100_000
 
 
 def create_schema(conn: sqlite3.Connection) -> None:
-    """Create tables and FTS5 virtual table."""
+    """Create the SQLite schema used for Open Library data.
+
+    Args:
+        conn: SQLite connection.
+    """
     conn.executescript("""
         CREATE TABLE IF NOT EXISTS authors (
             key TEXT PRIMARY KEY,
@@ -38,7 +43,17 @@ def create_schema(conn: sqlite3.Connection) -> None:
             authors TEXT,
             first_publish_year INTEGER,
             cover_id INTEGER,
-            subjects TEXT
+            subjects TEXT,
+            description TEXT,
+            subtitle TEXT,
+            subject_places TEXT,
+            subject_people TEXT,
+            subject_times TEXT,
+            lc_classifications TEXT,
+            dewey_number TEXT,
+            first_sentence TEXT,
+            links TEXT,
+            excerpts TEXT
         );
     """)
 
@@ -139,6 +154,57 @@ def _extract_year(date_str: str | None) -> int | None:
     return None
 
 
+def _extract_text_field(value: Any) -> str | None:
+    """Extract text from either a plain string or Open Library text object.
+
+    Args:
+        value: Raw field value from the works JSON record.
+
+    Returns:
+        Clean text value, or None when unavailable.
+    """
+    if value is None:
+        return None
+    if isinstance(value, dict):
+        value = value.get("value")
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _join_list_field(values: Any, limit: int = 10) -> str | None:
+    """Join a list field into a semicolon-separated string.
+
+    Args:
+        values: Raw field value from the works JSON record.
+        limit: Maximum number of items to keep.
+
+    Returns:
+        Semicolon-separated string, or None when unavailable.
+    """
+    if not isinstance(values, list) or not values:
+        return None
+    cleaned = [str(value).strip() for value in values if str(value).strip()]
+    if not cleaned:
+        return None
+    return "; ".join(cleaned[:limit])
+
+
+def _serialize_json_field(value: Any) -> str | None:
+    """Serialize a complex JSON field for SQLite storage.
+
+    Args:
+        value: Raw JSON-serializable value.
+
+    Returns:
+        Compact JSON string, or None when value is empty.
+    """
+    if value in (None, "", [], {}):
+        return None
+    return json.dumps(value, ensure_ascii=False, separators=(",", ":"))
+
+
 def load_works(conn: sqlite3.Connection, gz_path: Path) -> int:
     """Load works from gzipped TSV dump, resolving author references.
 
@@ -161,7 +227,26 @@ def load_works(conn: sqlite3.Connection, gz_path: Path) -> int:
     start = time.monotonic()
     count = 0
     skipped = 0
-    batch: list[tuple[str, str, str | None, int | None, int | None, str | None]] = []
+    batch: list[
+        tuple[
+            str,
+            str,
+            str | None,
+            int | None,
+            int | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+        ]
+    ] = []
 
     with gzip.open(gz_path, "rt", encoding="utf-8", errors="replace") as f:
         for line in f:
@@ -194,23 +279,49 @@ def load_works(conn: sqlite3.Connection, gz_path: Path) -> int:
             covers = data.get("covers", [])
             cover_id = covers[0] if covers and isinstance(covers[0], int) else None
 
-            subjects = data.get("subjects", [])
-            # Store first 10 subjects as semicolon-separated string
-            if subjects and isinstance(subjects, list):
-                subjects_str = "; ".join(str(s) for s in subjects[:10])
-            else:
-                subjects_str = None
+            subjects_str = _join_list_field(data.get("subjects"))
+            description = _extract_text_field(data.get("description"))
+            subtitle = _extract_text_field(data.get("subtitle"))
+            subject_places = _join_list_field(data.get("subject_places"))
+            subject_people = _join_list_field(data.get("subject_people"))
+            subject_times = _join_list_field(data.get("subject_times"))
+            lc_classifications = _join_list_field(data.get("lc_classifications"))
+            dewey_number = _join_list_field(data.get("dewey_number"))
+            first_sentence = _extract_text_field(data.get("first_sentence"))
+            links = _serialize_json_field(data.get("links"))
+            excerpts = _serialize_json_field(data.get("excerpts"))
 
             batch.append(
-                (key, title, authors_str, first_publish_year, cover_id, subjects_str)
+                (
+                    key,
+                    title,
+                    authors_str,
+                    first_publish_year,
+                    cover_id,
+                    subjects_str,
+                    description,
+                    subtitle,
+                    subject_places,
+                    subject_people,
+                    subject_times,
+                    lc_classifications,
+                    dewey_number,
+                    first_sentence,
+                    links,
+                    excerpts,
+                )
             )
             count += 1
 
             if len(batch) >= BATCH_SIZE:
                 conn.executemany(
                     "INSERT OR IGNORE INTO works "
-                    "(key, title, authors, first_publish_year, cover_id, subjects) "
-                    "VALUES (?, ?, ?, ?, ?, ?)",
+                    "("
+                    "key, title, authors, first_publish_year, cover_id, subjects, "
+                    "description, subtitle, subject_places, subject_people, "
+                    "subject_times, lc_classifications, dewey_number, "
+                    "first_sentence, links, excerpts"
+                    ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
                     batch,
                 )
                 batch = []
@@ -225,8 +336,12 @@ def load_works(conn: sqlite3.Connection, gz_path: Path) -> int:
     if batch:
         conn.executemany(
             "INSERT OR IGNORE INTO works "
-            "(key, title, authors, first_publish_year, cover_id, subjects) "
-            "VALUES (?, ?, ?, ?, ?, ?)",
+            "("
+            "key, title, authors, first_publish_year, cover_id, subjects, "
+            "description, subtitle, subject_places, subject_people, "
+            "subject_times, lc_classifications, dewey_number, "
+            "first_sentence, links, excerpts"
+            ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
             batch,
         )
     conn.commit()
@@ -240,7 +355,11 @@ def load_works(conn: sqlite3.Connection, gz_path: Path) -> int:
 
 
 def build_fts_index(conn: sqlite3.Connection) -> None:
-    """Create and populate the FTS5 full-text search index."""
+    """Create and populate the FTS5 full-text search index.
+
+    Args:
+        conn: SQLite connection.
+    """
     print("\nBuilding FTS5 search index...")
     start = time.monotonic()
 
@@ -250,6 +369,7 @@ def build_fts_index(conn: sqlite3.Connection) -> None:
         CREATE VIRTUAL TABLE books_fts USING fts5(
             title,
             authors,
+            description,
             content='works',
             content_rowid='rowid',
             tokenize='porter unicode61'
@@ -257,8 +377,9 @@ def build_fts_index(conn: sqlite3.Connection) -> None:
     """)
 
     conn.execute("""
-        INSERT INTO books_fts(rowid, title, authors)
-        SELECT rowid, title, COALESCE(authors, '') FROM works
+        INSERT INTO books_fts(rowid, title, authors, description)
+        SELECT rowid, title, COALESCE(authors, ''), COALESCE(description, '')
+        FROM works
     """)
     conn.commit()
 
@@ -267,7 +388,11 @@ def build_fts_index(conn: sqlite3.Connection) -> None:
 
 
 def create_indexes(conn: sqlite3.Connection) -> None:
-    """Create secondary indexes for common lookups."""
+    """Create secondary indexes for common lookups.
+
+    Args:
+        conn: SQLite connection.
+    """
     print("\nCreating secondary indexes...")
     start = time.monotonic()
     conn.execute("CREATE INDEX IF NOT EXISTS idx_works_title ON works(title)")
@@ -277,6 +402,7 @@ def create_indexes(conn: sqlite3.Connection) -> None:
 
 
 def main() -> None:
+    """Build the local Open Library SQLite database from dump files."""
     authors_path = DATA_DIR / "ol_dump_authors_latest.txt.gz"
     works_path = DATA_DIR / "ol_dump_works_latest.txt.gz"
 

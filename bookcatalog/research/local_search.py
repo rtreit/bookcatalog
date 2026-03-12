@@ -183,8 +183,10 @@ class LocalBookSearch:
             limit: Maximum results to return.
 
         Returns:
-            List of work dicts with keys: key, title, authors,
-            first_publish_year, cover_id, subjects, rank.
+            List of work dicts with keys including key, title, authors,
+            first_publish_year, cover_id, subjects, description, subtitle,
+            subject_people, subject_places, subject_times,
+            lc_classifications, dewey_number, first_sentence, and rank.
         """
         fts_queries = _build_fts_queries(query)
         if not fts_queries:
@@ -195,7 +197,10 @@ class LocalBookSearch:
                 rows = self._conn.execute(
                     """
                     SELECT w.key, w.title, w.authors, w.first_publish_year,
-                           w.cover_id, w.subjects, rank
+                           w.cover_id, w.subjects, w.description, w.subtitle,
+                           w.subject_people, w.subject_places, w.subject_times,
+                           w.lc_classifications, w.dewey_number, w.first_sentence,
+                           rank
                     FROM books_fts
                     JOIN works w ON books_fts.rowid = w.rowid
                     WHERE books_fts MATCH ?

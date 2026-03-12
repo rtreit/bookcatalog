@@ -1,6 +1,6 @@
 """Vision agent for analyzing photos of book stacks.
 
-Uses a vision-capable model via LangGraph with the book search MCP tool to:
+Uses a vision-capable model via LangGraph with native local book tools to:
 1. Identify book titles and authors from an image
 2. Match each identified book against the local Open Library database
 """
@@ -14,7 +14,8 @@ from typing import Any
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
 
-from .config import OPENAI_API_KEY, VISION_MODEL, get_mcp_server_config
+from .config import OPENAI_API_KEY, VISION_MODEL
+from .tools import get_agent_tools
 
 logger = logging.getLogger(__name__)
 
@@ -71,15 +72,9 @@ async def run_vision_agent(
     )
 
     if tools is None:
-        from langchain_mcp_adapters.client import MultiServerMCPClient
+        tools = get_agent_tools()
 
-        client = MultiServerMCPClient(get_mcp_server_config())
-        mcp_tools = await client.get_tools()
-        return await _invoke_vision_agent(
-            model, mcp_tools, image_data, media_type
-        )
-    else:
-        return await _invoke_vision_agent(model, tools, image_data, media_type)
+    return await _invoke_vision_agent(model, tools, image_data, media_type)
 
 
 async def analyze_photo_file(

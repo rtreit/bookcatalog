@@ -25,6 +25,9 @@ class FakeLocalSearch:
                 "title": "Dune",
                 "authors": "Frank Herbert",
                 "first_publish_year": 1965,
+                "description": "A science fiction epic on Arrakis.",
+                "subtitle": "Illustrated Edition",
+                "first_sentence": "A beginning is the time for taking the most delicate care...",
             },
             {
                 "title": "Foundation",
@@ -51,6 +54,7 @@ class FakeLocalSearch:
                     edition_count=1,
                     isbn=None,
                     decision="book",
+                    raw_doc=r,
                 )
         return None
 
@@ -63,6 +67,7 @@ def test_search_books_returns_results(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Dune" in result
     assert "Frank Herbert" in result
     assert "1965" in result
+    assert "Description:" in result
 
 
 def test_search_books_no_results(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -81,6 +86,7 @@ def test_match_book_found(monkeypatch: pytest.MonkeyPatch) -> None:
     assert "Dune" in result
     assert "Frank Herbert" in result
     assert "book" in result.lower()
+    assert "Description:" in result
 
 
 def test_match_book_not_found(monkeypatch: pytest.MonkeyPatch) -> None:

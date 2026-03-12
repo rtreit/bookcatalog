@@ -153,6 +153,37 @@ class TestPreprocessorAgent:
         assert "USB-C Hub Adapter" in captured["messages"][0]["content"]
 
     @pytest.mark.asyncio
+    async def test_run_preprocessor_uses_native_tools_by_default(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """Native agent tools are loaded when no explicit tools are passed."""
+        captured: dict[str, Any] = {}
+
+        async def fake_invoke_agent(
+            model: Any,
+            tools: list[Any],
+            messages: list[dict[str, str]],
+        ) -> dict[str, Any]:
+            captured["tools"] = tools
+            captured["messages"] = messages
+            return {
+                "raw_response": "Found a likely match.",
+                "results": [],
+            }
+
+        fake_tools = [object(), object(), object()]
+        monkeypatch.setattr(preprocessor, "ChatOpenAI", lambda **_: object())
+        monkeypatch.setattr(preprocessor, "_invoke_agent", fake_invoke_agent)
+        monkeypatch.setattr(preprocessor, "get_agent_tools", lambda: fake_tools)
+
+        response = await run_preprocessor(messages=[{"role": "user", "content": "Dune"}])
+
+        assert response["raw_response"] == "Found a likely match."
+        assert captured["tools"] == fake_tools
+        assert captured["messages"] == [{"role": "user", "content": "Dune"}]
+
+    @pytest.mark.asyncio
     async def test_invoke_agent_extracts_prose_and_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Structured JSON is parsed while prose is preserved for chat display."""
 
