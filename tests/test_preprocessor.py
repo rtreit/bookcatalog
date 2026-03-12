@@ -1,14 +1,17 @@
-"""Tests for the preprocessor agent."""
+"""Tests for the conversational book assistant."""
 
 import json
+from typing import Any
+from unittest.mock import AsyncMock
 
 import pytest
 
+from bookcatalog.agents import preprocessor
 from bookcatalog.agents.preprocessor import _parse_response, run_preprocessor
 
 
 class TestParseResponse:
-    """Tests for _parse_response JSON parsing."""
+    """Tests for structured response parsing."""
 
     def test_valid_json_array(self) -> None:
         """Parses a valid JSON array correctly."""
@@ -47,12 +50,26 @@ class TestParseResponse:
     def test_multiple_items(self) -> None:
         """Parses multiple items correctly."""
         items = [
-            {"input": "Dune", "is_book": True, "title": "Dune",
-             "authors": ["Frank Herbert"], "year": 1965,
-             "confidence": 0.98, "decision": "book", "reason": "Novel"},
-            {"input": "USB Cable", "is_book": False, "title": None,
-             "authors": [], "year": None,
-             "confidence": 0.99, "decision": "not_a_book", "reason": "Electronics"},
+            {
+                "input": "Dune",
+                "is_book": True,
+                "title": "Dune",
+                "authors": ["Frank Herbert"],
+                "year": 1965,
+                "confidence": 0.98,
+                "decision": "book",
+                "reason": "Novel",
+            },
+            {
+                "input": "USB Cable",
+                "is_book": False,
+                "title": None,
+                "authors": [],
+                "year": None,
+                "confidence": 0.99,
+                "decision": "not_a_book",
+                "reason": "Electronics",
+            },
         ]
         content = json.dumps(items)
         result = _parse_response(content, ["Dune", "USB Cable"])
@@ -62,35 +79,110 @@ class TestParseResponse:
 
 
 class TestPreprocessorAgent:
-    """Integration tests for run_preprocessor with mocked tools."""
+    """Tests for run_preprocessor input normalization and response handling."""
 
     @pytest.mark.asyncio
-    async def test_with_mock_tools(self) -> None:
-        """Agent produces classification results with mocked tools."""
-        from langchain_core.tools import tool
+    async def test_run_preprocessor_with_message_history(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Message history is passed through to the agent invocation."""
+        captured: dict[str, Any] = {}
 
-        @tool
-        def match_book(title: str) -> str:
-            """Match a book title."""
-            if "dune" in title.lower():
-                return "Matched: Dune | Authors: Frank Herbert | Decision: book | Confidence: 95%"
-            return f"No match found for: {title}"
+        async def fake_invoke_agent(
+            model: Any,
+            tools: list[Any],
+            messages: list[dict[str, str]],
+        ) -> dict[str, Any]:
+            captured["messages"] = messages
+            return {
+                "raw_response": "Frank Herbert also wrote the Dune sequels.",
+                "results": [],
+            }
 
-        @tool
-        def search_books(query: str, max_results: int = 5) -> str:
-            """Search for books."""
-            if "dune" in query.lower():
-                return "Title: Dune | Authors: Frank Herbert | Year: 1965"
-            return f"No books found for: {query}"
+        monkeypatch.setattr(preprocessor, "ChatOpenAI", lambda **_: object())
+        monkeypatch.setattr(preprocessor, "_invoke_agent", fake_invoke_agent)
 
-        # Use a model name that exists (the test will actually call the API
-        # if OPENAI_API_KEY is set, otherwise it will fail gracefully).
-        # For CI, we skip this test.
-        import os
-        if not os.environ.get("OPENAI_API_KEY"):
-            pytest.skip("OPENAI_API_KEY not set, skipping live agent test")
+        response = await run_preprocessor(
+            messages=[
+                {"role": "user", "content": "Tell me about Dune."},
+                {"role": "assistant", "content": "It is a classic science fiction novel."},
+                {"role": "user", "content": "Tell me more about that author."},
+            ],
+            tools=[],
+        )
 
-        items = ["Dune by Frank Herbert", "USB-C Hub Adapter"]
-        results = await run_preprocessor(items, tools=[match_book, search_books])
-        assert isinstance(results, list)
-        assert len(results) >= 1
+        assert response["raw_response"] == "Frank Herbert also wrote the Dune sequels."
+        assert response["results"] == []
+        assert captured["messages"][-1]["content"] == "Tell me more about that author."
+
+    @pytest.mark.asyncio
+    async def test_run_preprocessor_with_legacy_items(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Legacy item lists are converted into a single classification message."""
+        captured: dict[str, Any] = {}
+
+        async def fake_invoke_agent(
+            model: Any,
+            tools: list[Any],
+            messages: list[dict[str, str]],
+        ) -> dict[str, Any]:
+            captured["messages"] = messages
+            return {
+                "raw_response": "I found one likely book.",
+                "results": [
+                    {
+                        "input": "Dune by Frank Herbert",
+                        "is_book": True,
+                        "title": "Dune",
+                        "authors": ["Frank Herbert"],
+                        "year": 1965,
+                        "confidence": 0.95,
+                        "decision": "book",
+                        "reason": "Matched in local catalog.",
+                    },
+                ],
+            }
+
+        monkeypatch.setattr(preprocessor, "ChatOpenAI", lambda **_: object())
+        monkeypatch.setattr(preprocessor, "_invoke_agent", fake_invoke_agent)
+
+        response = await run_preprocessor(
+            items=["Dune by Frank Herbert", "USB-C Hub Adapter"],
+            tools=[],
+        )
+
+        assert response["results"][0]["title"] == "Dune"
+        assert "Please classify the following items" in captured["messages"][0]["content"]
+        assert "USB-C Hub Adapter" in captured["messages"][0]["content"]
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_extracts_prose_and_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
+        """Structured JSON is parsed while prose is preserved for chat display."""
+
+        class FakeMessage:
+            def __init__(self, content: str) -> None:
+                self.content = content
+
+        fake_agent = AsyncMock()
+        fake_agent.ainvoke.return_value = {
+            "messages": [
+                FakeMessage(
+                    "I found one book and one non-book.\n\n```json\n"
+                    '[{"input":"Dune","is_book":true,"title":"Dune","authors":["Frank Herbert"],'
+                    '"year":1965,"confidence":0.98,"decision":"book","reason":"Matched"},'
+                    '{"input":"USB-C Cable","is_book":false,"title":null,"authors":[],'
+                    '"year":null,"confidence":0.99,"decision":"not_a_book","reason":"Accessory"}]'
+                    "\n```"
+                ),
+            ],
+        }
+
+        monkeypatch.setattr(preprocessor, "create_agent", lambda *args, **kwargs: fake_agent)
+
+        response = await preprocessor._invoke_agent(
+            model=object(),
+            tools=[],
+            messages=[{"role": "user", "content": "Dune\nUSB-C Cable"}],
+        )
+
+        assert response["raw_response"] == "I found one book and one non-book."
+        assert len(response["results"]) == 2
+        assert response["results"][0]["title"] == "Dune"
+        assert response["results"][1]["decision"] == "not_a_book"

@@ -1,7 +1,5 @@
 """Input preprocessing utilities for splitting and cleaning raw title input."""
 
-import re
-
 
 def split_order_items(text: str, delimiter: str = "|") -> list[str]:
     """Split a single order string into individual item titles.

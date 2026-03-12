@@ -212,6 +212,19 @@ class LocalBookSearch:
 
         return []
 
+    def get_stats(self) -> dict[str, int]:
+        """Return basic counts for the local Open Library database."""
+        works_count = self._conn.execute(
+            "SELECT COUNT(*) FROM works"
+        ).fetchone()[0]
+        authors_count = self._conn.execute(
+            "SELECT COUNT(*) FROM authors"
+        ).fetchone()[0]
+        return {
+            "works": int(works_count),
+            "authors": int(authors_count),
+        }
+
     def match_title(self, input_title: str, limit: int = 20) -> BookMatch | None:
         """Match an input string to a book in the local database.
 

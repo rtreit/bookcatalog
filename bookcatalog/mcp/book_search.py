@@ -27,8 +27,10 @@ def _get_search() -> LocalBookSearch:
 def search_books(query: str, max_results: int = 5) -> str:
     """Search the Open Library catalog for books matching a query.
 
-    Use this to look up book titles, find books by author, or verify
-    whether a given string refers to a real book.
+    Use this when the user asks conversational questions about books,
+    authors, or possible matches in the local catalog. This is best for
+    discovery, follow-up questions, and verifying whether a title or
+    author appears in the local Open Library database.
 
     Args:
         query: A book title, author name, or search phrase.
@@ -56,6 +58,21 @@ def search_books(query: str, max_results: int = 5) -> str:
         lines.append(" | ".join(parts))
 
     return "\n".join(lines)
+
+
+@mcp.tool()
+def get_database_stats() -> str:
+    """Return high-level statistics about the local Open Library database.
+
+    Use this when the user asks about the size or coverage of the local
+    catalog.
+    """
+    search = _get_search()
+    stats = search.get_stats()
+    return (
+        f"Local catalog stats: {stats['works']} works indexed, "
+        f"{stats['authors']} authors indexed."
+    )
 
 
 @mcp.tool()

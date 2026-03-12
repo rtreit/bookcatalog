@@ -3,7 +3,6 @@
 import asyncio
 import logging
 import re
-import time
 from difflib import SequenceMatcher
 
 import httpx
@@ -76,9 +75,6 @@ def extract_main_title(title: str) -> str | None:
             if len(main.split()) >= 3:
                 return main
     return None
-    s = re.sub(r"[^a-z0-9:,\-' ]+", " ", s)
-    s = re.sub(r"\s+", " ", s).strip()
-    return s
 
 
 def _title_similarity(a: str, b: str) -> float:

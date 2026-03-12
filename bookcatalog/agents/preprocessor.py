@@ -1,14 +1,9 @@
-"""Preprocessor agent for classifying and matching book titles.
-
-Uses gpt-5-nano via LangGraph with the book search MCP tool to:
-1. Classify items as book or non-book
-2. Extract clean title and author from book items
-3. Match books against the local Open Library database
-"""
+"""Conversational book assistant backed by MCP book search tools."""
 
 import json
 import logging
-from typing import Any
+import re
+from typing import Any, TypedDict
 
 from langchain.agents import create_agent
 from langchain_openai import ChatOpenAI
@@ -17,51 +12,66 @@ from .config import OPENAI_API_KEY, PREPROCESSOR_MODEL, get_mcp_server_config
 
 logger = logging.getLogger(__name__)
 
-SYSTEM_PROMPT = """You are a book classification and matching assistant.
 
-Your job is to process a list of items and determine which ones are real books.
-For each item:
+class AssistantResponse(TypedDict):
+    """Structured response returned by the conversational book assistant."""
 
-1. Decide if it is a BOOK or NOT A BOOK.
-   - Books include novels, textbooks, manuals, cookbooks, and any published written work.
-   - Non-books include electronics, accessories, hardware, household items, software,
-     and any other consumer product that is not a published book.
+    raw_response: str
+    results: list[dict[str, Any]]
 
-2. For items that ARE books, use the match_book tool to look up the book and get
-   accurate metadata (title, author, publication year).
 
-3. Return your results as a JSON array. Each element must have these fields:
-   - "input": the original input string
-   - "is_book": true or false
-   - "title": the matched/cleaned book title (null if not a book)
-   - "authors": list of author names (empty list if not a book)
-   - "year": publication year as integer (null if unknown or not a book)
-   - "confidence": a number from 0.0 to 1.0 indicating your confidence
-   - "decision": "book", "likely_book", or "not_a_book"
-   - "reason": brief explanation of your classification
+SYSTEM_PROMPT = """You are Book Assistant, a conversational librarian for a local book catalog.
 
-IMPORTANT:
-- Always use the match_book tool for items you classify as books.
-- Product names with brand names, model numbers, specs (GB, mAh, Hz) are NOT books.
-- Be decisive - if something is clearly a consumer product, classify it as not_a_book
-  without searching for it.
-- Respond with ONLY the JSON array, no other text."""
+You can:
+- Answer questions about books, authors, genres, and reading suggestions.
+- Search the local Open Library database with search_books when you need catalog facts.
+- Use match_book when the user gives a specific title or item that may be a book.
+- Use get_database_stats when it helps explain what is available in the local catalog.
+- Hold natural multi-turn conversations and rely on the message history for follow-up questions.
+
+Behavior rules:
+- For normal conversation, reply naturally in plain language.
+- When the user pastes a list of items, especially one item per line, treat it as a classification task.
+- For classification tasks, decide whether each item is a book or not a book.
+- For anything you classify as a book or likely book, use match_book to verify and enrich the result.
+- Product names with brand names, specs, or model numbers are usually not books.
+- If search results are uncertain or missing, say so clearly.
+
+When handling a list classification task:
+1. Give a short conversational summary first.
+2. Then include a JSON array in a ```json fenced block.
+3. Each array item must include:
+   - "input"
+   - "is_book"
+   - "title"
+   - "authors"
+   - "year"
+   - "confidence"
+   - "decision"
+   - "reason"
+
+For non-classification conversation, do not include JSON unless structured results would clearly help.
+Do not invent tool results. Ground catalog-specific claims in the available tools when needed."""
 
 
 async def run_preprocessor(
-    items: list[str],
-    tools: list | None = None,
-) -> list[dict[str, Any]]:
-    """Run the preprocessor agent on a list of items.
+    items: list[str] | None = None,
+    messages: list[dict[str, str]] | None = None,
+    tools: list[Any] | None = None,
+) -> AssistantResponse:
+    """Run the conversational book assistant.
 
     Args:
-        items: Raw input strings to classify and match.
-        tools: Optional pre-loaded tools (for testing). If None, tools are
-            loaded from the MCP book search server.
+        items: Optional legacy list of raw item strings to classify.
+        messages: Optional chat history as a list of role/content dicts.
+        tools: Optional pre-loaded tools, mainly for testing.
 
     Returns:
-        List of classification results with match metadata.
+        A response containing the assistant's prose reply and any parsed
+        structured classification results.
     """
+    normalized_messages = _normalize_messages(items=items, messages=messages)
+
     model = ChatOpenAI(
         model=PREPROCESSOR_MODEL,
         api_key=OPENAI_API_KEY,
@@ -73,43 +83,156 @@ async def run_preprocessor(
 
         client = MultiServerMCPClient(get_mcp_server_config())
         mcp_tools = await client.get_tools()
-        return await _invoke_agent(model, mcp_tools, items)
-    else:
-        return await _invoke_agent(model, tools, items)
+        return await _invoke_agent(model, mcp_tools, normalized_messages)
+
+    return await _invoke_agent(model, tools, normalized_messages)
+
+
+def _normalize_messages(
+    items: list[str] | None = None,
+    messages: list[dict[str, str]] | None = None,
+) -> list[dict[str, str]]:
+    """Normalize legacy item input or chat history into agent messages."""
+    if messages:
+        normalized_history: list[dict[str, str]] = []
+        for message in messages:
+            role = str(message.get("role", "user")).strip() or "user"
+            content = str(message.get("content", "")).strip()
+            if content:
+                normalized_history.append({"role": role, "content": content})
+        if normalized_history:
+            return normalized_history
+
+    cleaned_items = [item.strip() for item in items or [] if item.strip()]
+    if not cleaned_items:
+        raise ValueError("Either messages or items must contain at least one entry.")
+
+    if len(cleaned_items) == 1:
+        return [{"role": "user", "content": cleaned_items[0]}]
+
+    list_content = "\n".join(cleaned_items)
+    return [{
+        "role": "user",
+        "content": (
+            "Please classify the following items, identify which are books, "
+            "and match any books you can verify:\n\n"
+            f"{list_content}"
+        ),
+    }]
 
 
 async def _invoke_agent(
     model: ChatOpenAI,
-    tools: list,
-    items: list[str],
-) -> list[dict[str, Any]]:
-    """Create and invoke the agent with the given tools."""
+    tools: list[Any],
+    messages: list[dict[str, str]],
+) -> AssistantResponse:
+    """Create and invoke the assistant with the given tools and messages."""
     agent = create_agent(model, tools, system_prompt=SYSTEM_PROMPT)
-
-    items_text = "\n".join(f"- {item}" for item in items)
-    user_message = f"Classify and match the following items:\n\n{items_text}"
-
-    result = await agent.ainvoke({
-        "messages": [
-            {"role": "user", "content": user_message},
-        ],
-    })
+    result = await agent.ainvoke({"messages": messages})
 
     last_message = result["messages"][-1]
-    content = last_message.content if hasattr(last_message, "content") else str(last_message)
+    content = _message_content_to_text(
+        last_message.content if hasattr(last_message, "content") else last_message
+    )
+    raw_response = _extract_text_response(content)
+    structured_payload = _extract_structured_payload(content)
+    original_items = _extract_latest_user_items(messages)
+    parsed_results = (
+        _parse_response(structured_payload, original_items)
+        if structured_payload is not None
+        else []
+    )
 
-    return _parse_response(content, items)
+    return {
+        "raw_response": raw_response,
+        "results": parsed_results,
+    }
+
+
+def _message_content_to_text(content: Any) -> str:
+    """Convert LangChain message content into plain text."""
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                parts.append(str(item.get("text", "")))
+            else:
+                parts.append(str(item))
+        return "\n".join(part for part in parts if part)
+
+    return str(content)
+
+
+def _extract_latest_user_items(messages: list[dict[str, str]]) -> list[str]:
+    """Extract likely list items from the most recent user message."""
+    for message in reversed(messages):
+        if message.get("role") != "user":
+            continue
+
+        content = message.get("content", "").strip()
+        if not content:
+            return []
+
+        lines = [line.strip(" -\t") for line in content.splitlines()]
+        non_empty_lines = [line for line in lines if line]
+        if len(non_empty_lines) <= 1:
+            return non_empty_lines
+
+        if non_empty_lines[0].lower().startswith("please classify"):
+            return non_empty_lines[1:]
+        return non_empty_lines
+
+    return []
+
+
+def _extract_structured_payload(content: str) -> str | None:
+    """Extract a JSON array payload from an assistant response, if present."""
+    text = content.strip()
+    if not text:
+        return None
+
+    fenced_match = re.search(
+        r"```(?:json)?\s*(\[[\s\S]*?\])\s*```",
+        text,
+        flags=re.IGNORECASE,
+    )
+    if fenced_match:
+        return fenced_match.group(1).strip()
+
+    full_text = text.strip()
+    if full_text.startswith("[") and full_text.endswith("]"):
+        return full_text
+
+    bracket_match = re.search(r"(\[[\s\S]*\])", text)
+    if bracket_match:
+        return bracket_match.group(1).strip()
+
+    return None
+
+
+def _extract_text_response(content: str) -> str:
+    """Remove structured JSON blocks so the chat UI can show assistant prose."""
+    text = re.sub(
+        r"```(?:json)?\s*\[[\s\S]*?\]\s*```",
+        "",
+        content,
+        flags=re.IGNORECASE,
+    ).strip()
+    return text
 
 
 def _parse_response(
     content: str, original_items: list[str]
 ) -> list[dict[str, Any]]:
     """Parse the agent's JSON response into structured results."""
-    # Strip markdown code fences if present
     text = content.strip()
     if text.startswith("```"):
         lines = text.split("\n")
-        # Remove first and last lines (``` markers)
         lines = lines[1:]
         if lines and lines[-1].strip() == "```":
             lines = lines[:-1]
@@ -122,7 +245,6 @@ def _parse_response(
     except json.JSONDecodeError:
         logger.warning("Failed to parse agent response as JSON: %s", text[:200])
 
-    # Fallback: return items as unclassified
     return [
         {
             "input": item,

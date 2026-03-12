@@ -2,8 +2,6 @@
 
 import os
 
-import pytest
-
 from bookcatalog.agents.config import (
     MCP_BOOK_SEARCH_PATH,
     get_mcp_server_config,

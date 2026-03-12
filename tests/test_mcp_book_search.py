@@ -2,7 +2,7 @@
 
 import pytest
 
-from bookcatalog.mcp.book_search import search_books, match_book, _get_search, _search
+from bookcatalog.mcp.book_search import match_book, search_books
 
 # Reset the module-level singleton before tests
 import bookcatalog.mcp.book_search as bsm

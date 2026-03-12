@@ -14,6 +14,7 @@ interface ClassifiedItem {
 
 interface ChatResponse {
   results: ClassifiedItem[];
+  message: string;
   raw_response: string;
   model: string;
   error: string | null;
@@ -31,6 +32,7 @@ export default function AgentChat() {
   const [input, setInput] = useState('');
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [loading, setLoading] = useState(false);
+  const [loadingLabel, setLoadingLabel] = useState('Thinking...');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
@@ -44,16 +46,18 @@ export default function AgentChat() {
 
     const lines = text.split('\n').filter(s => s.trim());
     const isMultiItem = lines.length > 1;
+    const nextMessages: ChatMessage[] = [...messages, { role: 'user', content: text }];
 
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    setMessages(nextMessages);
     setInput('');
     setLoading(true);
+    setLoadingLabel(isMultiItem ? 'Reviewing your items...' : 'Thinking...');
 
     try {
-      const body: { message: string; items?: string[] } = { message: text };
-      if (isMultiItem) {
-        body.items = lines;
-      }
+      const body = {
+        message: text,
+        messages: nextMessages.map(({ role, content }) => ({ role, content })),
+      };
 
       const res = await fetch('/api/agents/chat', {
         method: 'POST',
@@ -70,14 +74,19 @@ export default function AgentChat() {
       if (data.error) {
         setMessages(prev => [
           ...prev,
-          { role: 'assistant', content: '', error: data.error ?? undefined, model: data.model },
+          {
+            role: 'assistant',
+            content: data.message || data.raw_response,
+            error: data.error ?? undefined,
+            model: data.model,
+          },
         ]);
       } else {
         setMessages(prev => [
           ...prev,
           {
             role: 'assistant',
-            content: '',
+            content: data.message || data.raw_response,
             results: data.results,
             model: data.model,
           },
@@ -87,11 +96,11 @@ export default function AgentChat() {
       setMessages(prev => [
         ...prev,
         {
-          role: 'assistant',
-          content: '',
-          error: err instanceof Error ? err.message : 'An unexpected error occurred',
-        },
-      ]);
+            role: 'assistant',
+            content: '',
+            error: err instanceof Error ? err.message : 'An unexpected error occurred',
+          },
+        ]);
     } finally {
       setLoading(false);
     }
@@ -127,10 +136,11 @@ Samsung T7 Shield Portable SSD 2TB`
       <div className="chat-messages">
         {messages.length === 0 && (
           <div className="chat-empty">
-            <div className="chat-empty-title">Book Classification Agent</div>
+            <div className="chat-empty-title">Book Assistant</div>
             <div className="chat-empty-text">
-              Send a list of items (one per line) and the AI agent will classify
-              each as a book or non-book, then look up matching metadata.
+              Ask about books, authors, or recommendations. You can also paste a
+              list of items, one per line, and the assistant will classify which
+              ones are books and match them to the local catalog.
             </div>
             <button className="chat-sample-btn" onClick={loadSample}>
               Load sample items
@@ -149,6 +159,10 @@ Samsung T7 Shield Portable SSD 2TB`
 
             {msg.role === 'user' && (
               <pre className="chat-user-text">{msg.content}</pre>
+            )}
+
+            {msg.role === 'assistant' && msg.content && (
+              <div className="chat-assistant-text">{msg.content}</div>
             )}
 
             {msg.error && (
@@ -194,7 +208,7 @@ Samsung T7 Shield Portable SSD 2TB`
             <div className="chat-message-header">Agent</div>
             <div className="chat-loading">
               <div className="spinner" />
-              <span>Classifying items...</span>
+              <span>{loadingLabel}</span>
             </div>
           </div>
         )}
@@ -205,14 +219,14 @@ Samsung T7 Shield Portable SSD 2TB`
       <div className="chat-input-bar">
         <textarea
           ref={textareaRef}
-          className="chat-textarea"
-          value={input}
-          onChange={e => setInput(e.target.value)}
-          onKeyDown={handleKeyDown}
-          placeholder="Paste items to classify (one per line), or ask about a book..."
-          disabled={loading}
-          rows={3}
-        />
+            className="chat-textarea"
+            value={input}
+            onChange={e => setInput(e.target.value)}
+            onKeyDown={handleKeyDown}
+            placeholder="Ask about a book, author, or series, or paste items to classify..."
+            disabled={loading}
+            rows={3}
+          />
         <button
           className="chat-send-btn"
           onClick={handleSend}

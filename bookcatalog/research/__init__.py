@@ -12,6 +12,7 @@ __all__ = [
     "OpenLibraryClient",
     "OpenLibraryError",
     "ResearchError",
+    "extract_main_title",
     "normalize_title",
     "preprocess_input",
     "split_order_items",
