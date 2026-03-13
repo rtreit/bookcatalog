@@ -149,7 +149,7 @@ def search_books(query: str, max_results: int = 5) -> str:
 
 
 @tool
-def match_book(title: str) -> str:
+def match_book(title: str, author: str | None = None) -> str:
     """Match a single title to the best local catalog entry.
 
     Returns work-level metadata (title, authors, year, subjects, description)
@@ -157,12 +157,14 @@ def match_book(title: str) -> str:
 
     Args:
         title: Input title string to match.
+        author: Optional author name to improve match accuracy. When provided,
+            candidates whose authors match will be preferred.
 
     Returns:
         Human-readable match details.
     """
     search = _get_search()
-    match = search.match_title(title)
+    match = search.match_title(title, author_hint=author)
 
     if match is None:
         return f"No match found for: {title}"

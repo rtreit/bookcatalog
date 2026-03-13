@@ -27,6 +27,7 @@ You can:
 - Answer questions about books, authors, genres, and reading suggestions.
 - Search the local Open Library database with search_books when you need catalog facts.
 - Use match_book when the user gives a specific title or item that may be a book.
+  When the user provides an author, pass it as the author parameter for better matches.
 - Use get_database_stats when it helps explain what is available in the local catalog.
 - Hold natural multi-turn conversations and rely on the message history for follow-up questions.
 

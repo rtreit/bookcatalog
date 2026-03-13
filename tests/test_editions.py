@@ -272,3 +272,92 @@ class TestBookMatchModel:
         assert match.publisher == "Dover"
         assert match.number_of_pages == 96
         assert match.physical_format == "Paperback"
+
+
+@pytest.fixture()
+def db_with_ambiguous_titles(tmp_path: Path) -> Path:
+    """Create a database with multiple works sharing similar titles but
+    different authors, simulating the disambiguation challenge."""
+    db_path = tmp_path / "test_ambiguous.db"
+    conn = sqlite3.connect(str(db_path))
+
+    conn.executescript("""
+        CREATE TABLE authors (key TEXT PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE works (
+            key TEXT PRIMARY KEY, title TEXT NOT NULL, authors TEXT,
+            first_publish_year INTEGER, cover_id INTEGER, subjects TEXT,
+            description TEXT, subtitle TEXT, subject_places TEXT,
+            subject_people TEXT, subject_times TEXT, lc_classifications TEXT,
+            dewey_number TEXT, first_sentence TEXT, links TEXT, excerpts TEXT
+        );
+
+        INSERT INTO authors (key, name) VALUES
+            ('/authors/OL1A', 'Lauri Hill'),
+            ('/authors/OL2A', 'David Kirk'),
+            ('/authors/OL3A', 'Louisa May Alcott'),
+            ('/authors/OL4A', 'Louis Jambor');
+
+        INSERT INTO works (key, title, authors, first_publish_year) VALUES
+            ('/works/OL1W', 'The Listening Walk', 'Lauri Hill', 1991),
+            ('/works/OL2W', 'The listening walk', 'David Kirk', 1995),
+            ('/works/OL3W', 'The Listening Walk', NULL, NULL),
+            ('/works/OL4W', 'Jos Boys', 'Louisa May Alcott', 1886),
+            ('/works/OL5W', 'JOs Boys', 'Louis Jambor', NULL);
+
+        CREATE VIRTUAL TABLE books_fts USING fts5(
+            title, authors, description,
+            content='works', content_rowid='rowid',
+            tokenize='porter unicode61'
+        );
+
+        INSERT INTO books_fts(rowid, title, authors, description)
+        SELECT rowid, title, COALESCE(authors, ''), COALESCE(description, '')
+        FROM works;
+    """)
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+class TestAuthorHintDisambiguation:
+    """Tests for author_hint parameter in match_title."""
+
+    def test_author_hint_selects_correct_author(
+        self, db_with_ambiguous_titles: Path
+    ) -> None:
+        """author_hint picks the matching author when titles are similar."""
+        search = LocalBookSearch(db_with_ambiguous_titles)
+        match = search.match_title("A Listening Walk", author_hint="Hill")
+
+        assert match is not None
+        assert "Hill" in ", ".join(match.authors)
+
+    def test_no_hint_may_pick_wrong_author(
+        self, db_with_ambiguous_titles: Path
+    ) -> None:
+        """Without author_hint, the match may pick a different author."""
+        search = LocalBookSearch(db_with_ambiguous_titles)
+        match = search.match_title("A Listening Walk")
+
+        assert match is not None
+        # Without hint, we just verify we get a match - author may vary
+
+    def test_author_hint_alcott(
+        self, db_with_ambiguous_titles: Path
+    ) -> None:
+        """author_hint 'Alcott' picks the Alcott entry over Jambor."""
+        search = LocalBookSearch(db_with_ambiguous_titles)
+        match = search.match_title("Jo's Boys", author_hint="Alcott")
+
+        assert match is not None
+        assert "Alcott" in ", ".join(match.authors)
+
+    def test_author_hint_none_still_works(
+        self, db_with_ambiguous_titles: Path
+    ) -> None:
+        """match_title works normally when author_hint is None."""
+        search = LocalBookSearch(db_with_ambiguous_titles)
+        match = search.match_title("The Listening Walk", author_hint=None)
+
+        assert match is not None
+        assert "Listening Walk" in match.matched_title

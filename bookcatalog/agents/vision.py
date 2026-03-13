@@ -31,9 +31,19 @@ book, etc.). Your job is to:
    - The title (as best you can read it)
    - The author (if visible)
 
-3. Use the match_book tool to look up each identified book and get accurate metadata.
+3. Use the match_book tool to look up each identified book. Always pass the author
+   parameter when you can read or infer the author from the image - this greatly
+   improves match accuracy.
 
-4. Return your results as a JSON array. Each element must have:
+4. Validate each match before including it:
+   - If the matched authors do not match the author you read from the image, the
+     match is likely wrong. Set match_confidence to 0.0 and note the mismatch.
+   - If the matched title is substantially different from what you read, lower
+     the match_confidence accordingly.
+   - Use your judgment: minor differences (e.g., "A" vs "The", subtitle added)
+     are acceptable. Completely different authors are not.
+
+5. Return your results as a JSON array. Each element must have:
    - "extracted_title": what you read from the image
    - "extracted_author": author if visible (null if not)
    - "matched_title": the matched title from the database (null if no match)
@@ -45,6 +55,7 @@ book, etc.). Your job is to:
 
 IMPORTANT:
 - Always use the match_book tool for every book you identify.
+- Always pass the author parameter to match_book when you can see or infer the author.
 - If you can only partially read a title, still try to match it.
 - Note any books that are partially obscured or hard to read.
 - Respond with ONLY the JSON array, no other text."""

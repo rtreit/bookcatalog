@@ -246,7 +246,12 @@ class LocalBookSearch:
             "editions": int(editions_count),
         }
 
-    def match_title(self, input_title: str, limit: int = 10) -> BookMatch | None:
+    def match_title(
+        self,
+        input_title: str,
+        limit: int = 10,
+        author_hint: str | None = None,
+    ) -> BookMatch | None:
         """Match an input string to a book in the local database.
 
         Searches using FTS5 with multiple query strategies, then scores
@@ -257,6 +262,8 @@ class LocalBookSearch:
         Args:
             input_title: Raw input string (e.g., from Amazon order export).
             limit: Number of FTS5 candidates to evaluate per strategy.
+            author_hint: Optional author name from an external source (e.g.,
+                vision agent). Used to prefer results with matching authors.
 
         Returns:
             BookMatch with decision "book" or "likely_book", or None
@@ -286,6 +293,10 @@ class LocalBookSearch:
                 if subtitle and len(subtitle) > 3:
                     search_queries.append(subtitle)
 
+        # If author hint provided, also search with title + author
+        if author_hint and author_hint.strip():
+            search_queries.append(f"{input_title} {author_hint}")
+
         # Collect unique candidates from all search variants
         seen_keys: set[str] = set()
         all_candidates: list[dict] = []
@@ -305,7 +316,9 @@ class LocalBookSearch:
         best_score = 0.0
 
         for result in all_candidates:
-            score = self._score_result(input_title, result)
+            score = self._score_result(
+                input_title, result, author_hint=author_hint
+            )
             if score > best_score:
                 best_score = score
                 result_title = result.get("title", "")
@@ -409,7 +422,12 @@ class LocalBookSearch:
         match.publish_date = best_edition["publish_date"]
         match.physical_format = best_edition["physical_format"]
 
-    def _score_result(self, input_title: str, result: dict) -> float:
+    def _score_result(
+        self,
+        input_title: str,
+        result: dict,
+        author_hint: str | None = None,
+    ) -> float:
         """Score a search result against the input string.
 
         Uses title similarity as the base score, with adjustments for
@@ -420,6 +438,8 @@ class LocalBookSearch:
         Args:
             input_title: The raw input string.
             result: A dict from the search results.
+            author_hint: Optional external author hint (e.g., from vision agent)
+                for stronger disambiguation.
 
         Returns:
             Confidence score between 0.0 and 1.0.
@@ -492,6 +512,25 @@ class LocalBookSearch:
                     score += 0.05  # strong author match bonus
                 else:
                     score -= 0.15  # author mismatch penalty
+
+        # External author hint (from vision agent or other source).
+        # Stronger than inline "by Author" since it comes from a
+        # separate identification step.
+        if author_hint and result_authors:
+            hint_lower = author_hint.lower().strip()
+            result_author_lower = result_authors.lower()
+            hint_parts = [p.strip() for p in hint_lower.split() if len(p) > 2]
+            matching = sum(1 for p in hint_parts if p in result_author_lower)
+            if hint_parts:
+                ratio = matching / len(hint_parts)
+                if ratio > 0.5:
+                    score += 0.10  # strong external author match
+                else:
+                    score -= 0.20  # external author mismatch
+        elif author_hint and not result_authors:
+            # Hint was given but this candidate has no authors at all -
+            # slight penalty since we cannot verify
+            score -= 0.05
 
         # Metadata completeness bonuses
         if result_authors:

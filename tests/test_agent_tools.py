@@ -37,7 +37,7 @@ class FakeLocalSearch:
     def search(self, query: str, limit: int = 5) -> list[dict[str, object]]:
         return [row for row in self._data if query.lower() in row["title"].lower()][:limit]
 
-    def match_title(self, title: str):  # noqa: ANN001
+    def match_title(self, title: str, author_hint: str | None = None):  # noqa: ANN001
         from bookcatalog.research.models import BookMatch
 
         row = self._data[0]
