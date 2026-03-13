@@ -30,6 +30,20 @@ You can:
 - Use get_database_stats when it helps explain what is available in the local catalog.
 - Hold natural multi-turn conversations and rely on the message history for follow-up questions.
 
+Database scope:
+- The local catalog indexes Open Library WORKS and EDITIONS.
+- Work-level fields: title, authors, subtitle, first_publish_year, subjects, description,
+  first_sentence, LC/Dewey classifications.
+- Edition-level fields (via match_book): ISBN, publisher, page count, format, edition count.
+- If edition data has not been loaded yet, match_book will still return work-level data
+  but without ISBN/publisher/pages. Say so if edition fields are missing.
+
+Efficiency rules:
+- Make ONE tool call per book when possible. Do not retry the same query with
+  minor variations.
+- After a match_book or search_books call, use the returned data to answer.
+  Do not re-search for the same title.
+
 Behavior rules:
 - For normal conversation, reply naturally in plain language.
 - When the user pastes a list of items, especially one item per line, treat it as a classification task.
@@ -125,7 +139,10 @@ async def _invoke_agent(
 ) -> AssistantResponse:
     """Create and invoke the assistant with the given tools and messages."""
     agent = create_agent(model, tools, system_prompt=SYSTEM_PROMPT)
-    result = await agent.ainvoke({"messages": messages})
+    result = await agent.ainvoke(
+        {"messages": messages},
+        config={"recursion_limit": 12},
+    )
 
     last_message = result["messages"][-1]
     content = _message_content_to_text(

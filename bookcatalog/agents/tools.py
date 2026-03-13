@@ -23,7 +23,7 @@ def _get_search() -> LocalBookSearch:
     return _search
 
 
-def _truncate_text(value: str, max_length: int = 200) -> str:
+def _truncate_text(value: str | None, max_length: int = 200) -> str:
     """Truncate text for readable tool output.
 
     Args:
@@ -33,6 +33,8 @@ def _truncate_text(value: str, max_length: int = 200) -> str:
     Returns:
         Truncated text with trailing ellipsis when needed.
     """
+    if not value:
+        return ""
     text = value.strip()
     if len(text) <= max_length:
         return text
@@ -123,11 +125,16 @@ def _format_match_metadata(match_data: dict[str, Any]) -> list[str]:
 
 @tool
 def search_books(query: str, max_results: int = 5) -> str:
-    """Search the local Open Library database for books.
+    """Search the local Open Library database for books by title, author, or subject.
+
+    The database indexes work-level metadata: title, authors, subtitle,
+    first_publish_year, subjects, description, first_sentence, LC/Dewey
+    classifications. Edition-level data (ISBN, publisher, page count) is
+    available through the match_book tool.
 
     Args:
         query: Title, author, or free-text query.
-        max_results: Maximum number of results to return.
+        max_results: Maximum number of results to return (1-20).
 
     Returns:
         Human-readable search results.
@@ -144,6 +151,9 @@ def search_books(query: str, max_results: int = 5) -> str:
 @tool
 def match_book(title: str) -> str:
     """Match a single title to the best local catalog entry.
+
+    Returns work-level metadata (title, authors, year, subjects, description)
+    plus edition-level data when available (ISBN, publisher, page count, format).
 
     Args:
         title: Input title string to match.
@@ -165,6 +175,16 @@ def match_book(title: str) -> str:
     ]
     if match.first_publish_year:
         parts.append(f"Year: {match.first_publish_year}")
+    if match.isbn:
+        parts.append(f"ISBN: {match.isbn}")
+    if match.publisher:
+        parts.append(f"Publisher: {match.publisher}")
+    if match.number_of_pages:
+        parts.append(f"Pages: {match.number_of_pages}")
+    if match.physical_format:
+        parts.append(f"Format: {match.physical_format}")
+    if match.edition_count:
+        parts.append(f"Editions: {match.edition_count}")
 
     raw_doc = match.raw_doc or {}
     parts.extend(_format_match_metadata(raw_doc))
@@ -180,10 +200,15 @@ def get_database_stats() -> str:
     """
     search = _get_search()
     stats = search.get_stats()
-    return (
-        f"Local catalog stats: {stats['works']} works indexed, "
-        f"{stats['authors']} authors indexed."
-    )
+    parts = [
+        f"Local catalog stats: {stats['works']} works indexed",
+        f"{stats['authors']} authors indexed",
+    ]
+    if stats.get("editions"):
+        parts.append(f"{stats['editions']} editions indexed (with ISBNs)")
+    else:
+        parts.append("no editions loaded yet (run build with --editions-only)")
+    return ", ".join(parts) + "."
 
 
 def get_agent_tools() -> list[Any]:

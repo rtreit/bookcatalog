@@ -131,14 +131,15 @@ if (-not $SkipDb) {
     }
     else {
         Write-Step "Downloading Open Library bulk dumps"
-        Write-Host "  This downloads ~4.7 GB of compressed data from openlibrary.org."
+        Write-Host "  This downloads ~13 GB of compressed data from openlibrary.org"
+        Write-Host "  (authors, works, and editions)."
         Write-Host "  Download time depends on your connection speed."
         Write-Host ""
         uv run python scripts/download_openlibrary.py
 
         Write-Step "Building SQLite search database"
-        Write-Host "  This parses 55M+ records and builds an FTS5 full-text index."
-        Write-Host "  Expect this to take 15-25 minutes and produce an ~12 GB database."
+        Write-Host "  This parses 90M+ records and builds an FTS5 full-text index."
+        Write-Host "  Expect this to take 30-60 minutes and produce a ~20+ GB database."
         Write-Host ""
         if ($Force) {
             uv run python scripts/build_openlibrary_db.py --force

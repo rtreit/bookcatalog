@@ -76,6 +76,18 @@ class TestParseVisionResponse:
         assert len(result) == 1
         assert result[0]["matched_title"] is None
 
+    def test_none_content(self) -> None:
+        """Handles None content gracefully instead of raising AttributeError."""
+        result = _parse_vision_response(None)
+        assert len(result) == 1
+        assert "error" in result[0]
+
+    def test_empty_content(self) -> None:
+        """Handles empty string content gracefully."""
+        result = _parse_vision_response("")
+        assert len(result) == 1
+        assert "error" in result[0]
+
 
 class TestVisionAgent:
     """Integration tests for run_vision_agent with mocked tools."""

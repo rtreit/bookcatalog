@@ -11,6 +11,7 @@ from difflib import SequenceMatcher
 from pathlib import Path
 
 from .models import BookMatch
+from .product_filter import is_likely_product
 
 logger = logging.getLogger(__name__)
 
@@ -20,7 +21,7 @@ DEFAULT_DB_PATH = (
 
 # Scoring thresholds
 HIGH_CONFIDENCE = 0.85
-MODERATE_CONFIDENCE = 0.60
+MODERATE_CONFIDENCE = 0.70
 
 # Words to strip from FTS queries (not useful for title matching)
 _NOISE_WORDS = frozenset({
@@ -84,17 +85,21 @@ def _tokenize_for_fts(text: str) -> list[str]:
     return useful
 
 
-def _build_fts_queries(text: str) -> list[str]:
+def _build_fts_queries(text: str, max_tokens: int = 8) -> list[str]:
     """Build FTS5 query strings with cascading specificity.
 
     Returns queries from most specific to broadest:
     1. AND on title tokens only (if "by Author" detected)
-    2. AND on all tokens
-    3. AND on core tokens (drop short/noisy ones)
-    4. OR on all tokens (broadest fallback)
+    2. AND on all tokens (capped at max_tokens)
+    3. OR on all tokens (capped at max_tokens)
+
+    Capping tokens avoids broad OR queries against product descriptions
+    that would scan too much of the FTS index and take seconds.
 
     Args:
         text: Raw search string.
+        max_tokens: Maximum number of tokens to use in FTS queries.
+            Longer inputs are truncated to this count.
 
     Returns:
         List of FTS5 query strings to try in order.
@@ -102,6 +107,9 @@ def _build_fts_queries(text: str) -> list[str]:
     tokens = _tokenize_for_fts(text)
     if not tokens:
         return []
+
+    # Cap tokens to limit query breadth
+    tokens = tokens[:max_tokens]
 
     queries = []
 
@@ -111,8 +119,8 @@ def _build_fts_queries(text: str) -> list[str]:
     if by_idx > 0:
         title_part = text[:by_idx]
         author_part = text[by_idx + 4:]
-        title_tokens = _tokenize_for_fts(title_part)
-        author_tokens = _tokenize_for_fts(author_part)
+        title_tokens = _tokenize_for_fts(title_part)[:max_tokens]
+        author_tokens = _tokenize_for_fts(author_part)[:max_tokens]
 
         if title_tokens and author_tokens:
             # Title AND + author AND: most specific
@@ -225,12 +233,20 @@ class LocalBookSearch:
         authors_count = self._conn.execute(
             "SELECT COUNT(*) FROM authors"
         ).fetchone()[0]
+        editions_count = 0
+        try:
+            editions_count = self._conn.execute(
+                "SELECT COUNT(*) FROM editions"
+            ).fetchone()[0]
+        except sqlite3.OperationalError:
+            pass
         return {
             "works": int(works_count),
             "authors": int(authors_count),
+            "editions": int(editions_count),
         }
 
-    def match_title(self, input_title: str, limit: int = 20) -> BookMatch | None:
+    def match_title(self, input_title: str, limit: int = 10) -> BookMatch | None:
         """Match an input string to a book in the local database.
 
         Searches using FTS5 with multiple query strategies, then scores
@@ -315,10 +331,12 @@ class LocalBookSearch:
 
         if best_match.confidence >= HIGH_CONFIDENCE:
             best_match.decision = "book"
+            self._enrich_with_edition(best_match)
             return best_match
 
         if best_match.confidence >= MODERATE_CONFIDENCE and best_match.authors:
             best_match.decision = "likely_book"
+            self._enrich_with_edition(best_match)
             return best_match
 
         logger.debug(
@@ -328,6 +346,68 @@ class LocalBookSearch:
             best_match.matched_title,
         )
         return None
+
+    def _enrich_with_edition(self, match: BookMatch) -> None:
+        """Look up edition data for a matched work and populate BookMatch fields.
+
+        Prefers editions with ISBN-13, then ISBN-10. Among those, prefers
+        editions with more metadata (page count, publisher).
+
+        Args:
+            match: BookMatch to enrich in place.
+        """
+        work_key = (match.raw_doc or {}).get("key")
+        if not work_key:
+            return
+
+        try:
+            rows = self._conn.execute(
+                "SELECT isbn_13, isbn_10, publishers, number_of_pages, "
+                "publish_date, physical_format "
+                "FROM editions WHERE work_key = ? "
+                "LIMIT 50",
+                (work_key,),
+            ).fetchall()
+        except sqlite3.OperationalError:
+            # editions table may not exist yet
+            return
+
+        if not rows:
+            return
+
+        match.edition_count = len(rows)
+
+        # Score each edition by metadata completeness
+        best_edition = None
+        best_score = -1
+        for row in rows:
+            score = 0
+            if row["isbn_13"]:
+                score += 3
+            if row["isbn_10"]:
+                score += 2
+            if row["number_of_pages"]:
+                score += 1
+            if row["publishers"]:
+                score += 1
+            if score > best_score:
+                best_score = score
+                best_edition = row
+
+        if best_edition is None:
+            return
+
+        isbn = best_edition["isbn_13"] or best_edition["isbn_10"]
+        if isbn:
+            # Take just the first ISBN from the semicolon-separated list
+            match.isbn = isbn.split(";")[0].strip()
+
+        if best_edition["publishers"]:
+            match.publisher = best_edition["publishers"].split(";")[0].strip()
+
+        match.number_of_pages = best_edition["number_of_pages"]
+        match.publish_date = best_edition["publish_date"]
+        match.physical_format = best_edition["physical_format"]
 
     def _score_result(self, input_title: str, result: dict) -> float:
         """Score a search result against the input string.
@@ -425,19 +505,38 @@ class LocalBookSearch:
 
         return max(0.0, min(score, 1.0))
 
-    def match_titles(self, titles: list[str], limit: int = 20) -> list[BookMatch | None]:
+    def match_titles(
+        self,
+        titles: list[str],
+        limit: int = 10,
+        skip_products: bool = True,
+    ) -> list[BookMatch | None]:
         """Match multiple input strings against the local database.
 
-        Local search is fast enough (~1ms per query) to run sequentially.
+        When skip_products is True, uses a fast heuristic pre-filter to skip
+        items that look like commercial products (electronics, clothing, etc.)
+        rather than book titles. This avoids expensive FTS queries for items
+        that are very unlikely to be books.
 
         Args:
             titles: List of raw input strings.
             limit: Number of FTS5 candidates to evaluate per title.
+            skip_products: If True, skip items that look like products.
 
         Returns:
             List of BookMatch results (or None) in the same order as input.
         """
-        return [self.match_title(t, limit=limit) for t in titles]
+        results: list[BookMatch | None] = []
+        skipped = 0
+        for title in titles:
+            if skip_products and is_likely_product(title):
+                results.append(None)
+                skipped += 1
+            else:
+                results.append(self.match_title(title, limit=limit))
+        if skipped:
+            logger.info("Pre-filter skipped %d/%d items as products", skipped, len(titles))
+        return results
 
     def close(self) -> None:
         """Close the database connection."""

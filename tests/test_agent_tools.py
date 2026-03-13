@@ -50,14 +50,17 @@ class FakeLocalSearch:
             title_similarity=0.92,
             authors=[str(row["authors"])],
             first_publish_year=int(row["first_publish_year"]),
-            edition_count=1,
-            isbn=None,
+            edition_count=12,
+            isbn="9780441172719",
+            publisher="Chilton Books",
+            number_of_pages=412,
+            physical_format="Hardcover",
             decision="book",
             raw_doc=row,
         )
 
     def get_stats(self) -> dict[str, int]:
-        return {"works": 123, "authors": 45}
+        return {"works": 123, "authors": 45, "editions": 0}
 
 
 def test_search_books_tool_returns_metadata(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,6 +85,11 @@ def test_match_book_tool_returns_metadata(monkeypatch: pytest.MonkeyPatch) -> No
     assert "Matched: Dune" in result
     assert "Description:" in result
     assert "First sentence:" in result
+    assert "ISBN: 9780441172719" in result
+    assert "Publisher: Chilton Books" in result
+    assert "Pages: 412" in result
+    assert "Format: Hardcover" in result
+    assert "Editions: 12" in result
 
 
 def test_get_database_stats_tool_returns_json(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -90,4 +98,5 @@ def test_get_database_stats_tool_returns_json(monkeypatch: pytest.MonkeyPatch) -
 
     result = tools_module.get_database_stats.invoke({})
 
-    assert result == "Local catalog stats: 123 works indexed, 45 authors indexed."
+    assert "123 works indexed" in result
+    assert "45 authors indexed" in result

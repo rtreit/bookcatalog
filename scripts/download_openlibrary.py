@@ -1,13 +1,14 @@
 """Download Open Library bulk data dumps.
 
 Downloads the monthly exports of Open Library catalog data for local
-indexing. Currently downloads works (~2.9GB) and authors (~0.5GB) dumps.
-Editions (~9.2GB) can be added later for ISBN data.
+indexing. Downloads works (~2.9GB), authors (~0.5GB), and editions
+(~9.2GB) dumps.
 
 Usage:
     uv run python scripts/download_openlibrary.py           # all dumps
     uv run python scripts/download_openlibrary.py authors    # just authors
     uv run python scripts/download_openlibrary.py works      # just works
+    uv run python scripts/download_openlibrary.py editions   # just editions
 """
 
 import sys
@@ -26,11 +27,10 @@ DUMPS = {
         "url": "https://openlibrary.org/data/ol_dump_works_latest.txt.gz",
         "desc": "Work records (~2.9GB)",
     },
-    # Uncomment to include editions (adds ISBN, publisher, page count):
-    # "editions": {
-    #     "url": "https://openlibrary.org/data/ol_dump_editions_latest.txt.gz",
-    #     "desc": "Edition records (~9.2GB)",
-    # },
+    "editions": {
+        "url": "https://openlibrary.org/data/ol_dump_editions_latest.txt.gz",
+        "desc": "Edition records (~9.2GB)",
+    },
 }
 
 

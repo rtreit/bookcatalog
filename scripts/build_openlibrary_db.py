@@ -1,12 +1,13 @@
 """Build SQLite database with FTS5 index from Open Library data dumps.
 
-Reads the gzipped TSV dump files (authors + works), extracts relevant
-fields from each JSON record, and builds a searchable SQLite database
-with full-text search via FTS5.
+Reads the gzipped TSV dump files (authors + works + editions), extracts
+relevant fields from each JSON record, and builds a searchable SQLite
+database with full-text search via FTS5.
 
 Usage:
-    uv run python scripts/build_openlibrary_db.py           # build (skip if exists)
-    uv run python scripts/build_openlibrary_db.py --force    # rebuild from scratch
+    uv run python scripts/build_openlibrary_db.py               # build (skip if exists)
+    uv run python scripts/build_openlibrary_db.py --force        # rebuild from scratch
+    uv run python scripts/build_openlibrary_db.py --editions-only  # add editions to existing DB
 """
 
 import gzip
@@ -54,6 +55,20 @@ def create_schema(conn: sqlite3.Connection) -> None:
             first_sentence TEXT,
             links TEXT,
             excerpts TEXT
+        );
+
+        CREATE TABLE IF NOT EXISTS editions (
+            key TEXT PRIMARY KEY,
+            work_key TEXT,
+            title TEXT,
+            isbn_10 TEXT,
+            isbn_13 TEXT,
+            publishers TEXT,
+            publish_date TEXT,
+            number_of_pages INTEGER,
+            physical_format TEXT,
+            languages TEXT,
+            cover_id INTEGER
         );
     """)
 
@@ -354,6 +369,148 @@ def load_works(conn: sqlite3.Connection, gz_path: Path) -> int:
     return count
 
 
+def load_editions(conn: sqlite3.Connection, gz_path: Path) -> int:
+    """Load editions from gzipped TSV dump into the editions table.
+
+    Extracts ISBN, publisher, page count, and other edition-level metadata,
+    linking each edition to its parent work via work_key.
+
+    Args:
+        conn: SQLite connection.
+        gz_path: Path to ol_dump_editions_latest.txt.gz.
+
+    Returns:
+        Number of editions loaded.
+    """
+    print(f"\nLoading editions from {gz_path.name}...")
+    start = time.monotonic()
+    count = 0
+    skipped = 0
+    batch: list[
+        tuple[
+            str,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            str | None,
+            int | None,
+            str | None,
+            str | None,
+            int | None,
+        ]
+    ] = []
+
+    with gzip.open(gz_path, "rt", encoding="utf-8", errors="replace") as f:
+        for line in f:
+            parts = line.split("\t", 4)
+            if len(parts) < 5:
+                continue
+            try:
+                data = json.loads(parts[4])
+            except (json.JSONDecodeError, IndexError):
+                continue
+
+            key = parts[1].strip()
+
+            # Resolve work key from the "works" reference list
+            work_refs = data.get("works", [])
+            work_key: str | None = None
+            if work_refs and isinstance(work_refs, list):
+                ref = work_refs[0]
+                if isinstance(ref, dict):
+                    work_key = ref.get("key")
+                elif isinstance(ref, str):
+                    work_key = ref
+
+            title = _extract_text_field(data.get("title"))
+
+            isbn_10 = _join_list_field(data.get("isbn_10"), limit=5)
+            isbn_13 = _join_list_field(data.get("isbn_13"), limit=5)
+
+            publishers = _join_list_field(data.get("publishers"), limit=3)
+            publish_date = _extract_text_field(data.get("publish_date"))
+
+            number_of_pages = data.get("number_of_pages")
+            if not isinstance(number_of_pages, int):
+                # Some records store page count as a string
+                try:
+                    number_of_pages = int(number_of_pages) if number_of_pages else None
+                except (ValueError, TypeError):
+                    number_of_pages = None
+
+            physical_format = _extract_text_field(data.get("physical_format"))
+
+            languages = data.get("languages", [])
+            if isinstance(languages, list):
+                lang_keys = []
+                for lang in languages:
+                    if isinstance(lang, dict):
+                        lang_key = lang.get("key", "")
+                        # Strip /languages/ prefix for readability
+                        lang_keys.append(lang_key.replace("/languages/", ""))
+                    elif isinstance(lang, str):
+                        lang_keys.append(lang)
+                languages_str = "; ".join(lang_keys) if lang_keys else None
+            else:
+                languages_str = None
+
+            covers = data.get("covers", [])
+            cover_id = covers[0] if covers and isinstance(covers[0], int) else None
+
+            batch.append((
+                key,
+                work_key,
+                title,
+                isbn_10,
+                isbn_13,
+                publishers,
+                publish_date,
+                number_of_pages,
+                physical_format,
+                languages_str,
+                cover_id,
+            ))
+            count += 1
+
+            if len(batch) >= BATCH_SIZE:
+                conn.executemany(
+                    "INSERT OR IGNORE INTO editions "
+                    "(key, work_key, title, isbn_10, isbn_13, publishers, "
+                    "publish_date, number_of_pages, physical_format, "
+                    "languages, cover_id) "
+                    "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                    batch,
+                )
+                batch = []
+
+            if count % PROGRESS_INTERVAL == 0:
+                elapsed = time.monotonic() - start
+                rate = count / elapsed
+                print(
+                    f"  {count:>12,} editions ({rate:,.0f}/sec, {skipped:,} skipped)"
+                )
+
+    if batch:
+        conn.executemany(
+            "INSERT OR IGNORE INTO editions "
+            "(key, work_key, title, isbn_10, isbn_13, publishers, "
+            "publish_date, number_of_pages, physical_format, "
+            "languages, cover_id) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            batch,
+        )
+    conn.commit()
+
+    elapsed = time.monotonic() - start
+    print(
+        f"  Loaded {count:,} editions in {elapsed:.1f}s "
+        f"({count / elapsed:,.0f}/sec), {skipped:,} skipped"
+    )
+    return count
+
+
 def build_fts_index(conn: sqlite3.Connection) -> None:
     """Create and populate the FTS5 full-text search index.
 
@@ -396,6 +553,15 @@ def create_indexes(conn: sqlite3.Connection) -> None:
     print("\nCreating secondary indexes...")
     start = time.monotonic()
     conn.execute("CREATE INDEX IF NOT EXISTS idx_works_title ON works(title)")
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_editions_work_key ON editions(work_key)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_editions_isbn_13 ON editions(isbn_13)"
+    )
+    conn.execute(
+        "CREATE INDEX IF NOT EXISTS idx_editions_isbn_10 ON editions(isbn_10)"
+    )
     conn.commit()
     elapsed = time.monotonic() - start
     print(f"  Indexes created in {elapsed:.1f}s")
@@ -405,6 +571,46 @@ def main() -> None:
     """Build the local Open Library SQLite database from dump files."""
     authors_path = DATA_DIR / "ol_dump_authors_latest.txt.gz"
     works_path = DATA_DIR / "ol_dump_works_latest.txt.gz"
+    editions_path = DATA_DIR / "ol_dump_editions_latest.txt.gz"
+
+    editions_only = "--editions-only" in sys.argv
+
+    if editions_only:
+        if not DB_PATH.exists():
+            print("ERROR: No existing database found. Run a full build first.")
+            sys.exit(1)
+        if not editions_path.exists():
+            print(f"ERROR: Missing dump file: {editions_path}")
+            print("Run: uv run python scripts/download_openlibrary.py editions")
+            sys.exit(1)
+
+        overall_start = time.monotonic()
+        conn = sqlite3.connect(str(DB_PATH))
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA synchronous=NORMAL")
+        conn.execute("PRAGMA cache_size=-2000000")
+        conn.execute("PRAGMA temp_store=MEMORY")
+
+        create_schema(conn)
+        # Clear existing editions for a clean reload
+        conn.execute("DELETE FROM editions")
+        conn.commit()
+        load_editions(conn, editions_path)
+        create_indexes(conn)
+
+        edition_count = conn.execute("SELECT COUNT(*) FROM editions").fetchone()[0]
+        db_size = DB_PATH.stat().st_size / 1e9
+        overall_elapsed = time.monotonic() - overall_start
+
+        print(f"\n{'=' * 40}")
+        print(f"  Editions added in {overall_elapsed / 60:.1f} min")
+        print(f"  Editions: {edition_count:,}")
+        print(f"  DB size:  {db_size:.2f} GB")
+        print(f"  Path:     {DB_PATH}")
+        print(f"{'=' * 40}")
+
+        conn.close()
+        return
 
     for p in [authors_path, works_path]:
         if not p.exists():
@@ -432,21 +638,27 @@ def main() -> None:
     create_schema(conn)
     load_authors(conn, authors_path)
     load_works(conn, works_path)
+
+    if editions_path.exists():
+        load_editions(conn, editions_path)
+
     build_fts_index(conn)
     create_indexes(conn)
 
     # Summary
     author_count = conn.execute("SELECT COUNT(*) FROM authors").fetchone()[0]
     work_count = conn.execute("SELECT COUNT(*) FROM works").fetchone()[0]
+    edition_count = conn.execute("SELECT COUNT(*) FROM editions").fetchone()[0]
     db_size = DB_PATH.stat().st_size / 1e9
     overall_elapsed = time.monotonic() - overall_start
 
     print(f"\n{'=' * 40}")
     print(f"  Database built in {overall_elapsed / 60:.1f} min")
-    print(f"  Authors: {author_count:,}")
-    print(f"  Works:   {work_count:,}")
-    print(f"  DB size: {db_size:.2f} GB")
-    print(f"  Path:    {DB_PATH}")
+    print(f"  Authors:  {author_count:,}")
+    print(f"  Works:    {work_count:,}")
+    print(f"  Editions: {edition_count:,}")
+    print(f"  DB size:  {db_size:.2f} GB")
+    print(f"  Path:     {DB_PATH}")
     print(f"{'=' * 40}")
 
     conn.close()

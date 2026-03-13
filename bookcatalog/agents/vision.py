@@ -138,20 +138,49 @@ async def _invoke_vision_agent(
                 ],
             },
         ],
-    })
+    }, config={"recursion_limit": 20})
 
     last_message = result["messages"][-1]
     content = (
         last_message.content
-        if hasattr(last_message, "content")
+        if hasattr(last_message, "content") and last_message.content is not None
         else str(last_message)
     )
+
+    # When the agent ends on a tool call, content may be empty or the
+    # last message may be a tool response rather than an AI message.
+    # Walk backwards to find the final AI text response.
+    if not content or content == str(last_message):
+        for msg in reversed(result["messages"]):
+            if hasattr(msg, "content") and msg.content and hasattr(msg, "type"):
+                if msg.type == "ai" and isinstance(msg.content, str):
+                    content = msg.content
+                    break
+
+    if not content:
+        logger.warning("Vision agent returned no text content")
+        return [
+            {
+                "extracted_title": None,
+                "error": "Vision agent did not return a text response",
+                "raw_response": str(result["messages"][-1])[:500],
+            }
+        ]
 
     return _parse_vision_response(content)
 
 
-def _parse_vision_response(content: str) -> list[dict[str, Any]]:
+def _parse_vision_response(content: str | None) -> list[dict[str, Any]]:
     """Parse the vision agent's JSON response."""
+    if not content:
+        return [
+            {
+                "extracted_title": None,
+                "error": "Empty response from vision agent",
+                "raw_response": "",
+            }
+        ]
+
     text = content.strip()
     if text.startswith("```"):
         lines = text.split("\n")
