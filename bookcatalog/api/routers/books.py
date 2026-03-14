@@ -33,7 +33,7 @@ class MatchRequest(BaseModel):
     titles: list[str] = Field(
         ...,
         min_length=1,
-        max_length=500,
+        max_length=2000,
         description="List of title strings to match against Open Library.",
     )
     delimiter: str | None = Field(
