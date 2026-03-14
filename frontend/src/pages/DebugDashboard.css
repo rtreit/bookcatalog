@@ -445,3 +445,330 @@
   animation: spin 0.8s linear infinite;
   margin-bottom: 12px;
 }
+
+/* Tab bar */
+.debug-tabs {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 24px;
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 0;
+}
+
+.debug-tab {
+  padding: 10px 20px;
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--text-muted);
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  cursor: pointer;
+  transition: all 0.15s;
+  margin-bottom: -1px;
+}
+
+.debug-tab:hover {
+  color: var(--text-secondary);
+}
+
+.debug-tab.active {
+  color: var(--accent);
+  border-bottom-color: var(--accent);
+}
+
+/* Search Tools tab */
+.tools-tab {
+  max-width: 900px;
+}
+
+.tools-description {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+  line-height: 1.5;
+}
+
+.tools-selector {
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+}
+
+.tools-tool-btn {
+  padding: 6px 14px;
+  font-size: 12px;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  color: var(--text-muted);
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.tools-tool-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--text-muted);
+}
+
+.tools-tool-btn.active {
+  color: var(--accent);
+  border-color: var(--accent);
+  background: rgba(99, 102, 241, 0.08);
+}
+
+.tools-tool-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+  margin-bottom: 16px;
+  font-style: italic;
+}
+
+.tools-input-area {
+  margin-bottom: 20px;
+}
+
+.tools-input-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.tools-label {
+  font-size: 13px;
+  color: var(--text-secondary);
+  min-width: 120px;
+  font-weight: 500;
+}
+
+.tools-input {
+  flex: 1;
+  padding: 8px 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  color: var(--text-primary);
+  font-size: 13px;
+  outline: none;
+  transition: border-color 0.15s;
+}
+
+.tools-input:focus {
+  border-color: var(--accent);
+}
+
+.tools-input::placeholder {
+  color: var(--text-muted);
+}
+
+.tools-input-short {
+  max-width: 80px;
+  flex: 0;
+}
+
+.tools-result {
+  margin-bottom: 24px;
+}
+
+.tools-result-header {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 14px;
+  background: var(--bg-secondary);
+  border: 1px solid var(--border);
+  border-bottom: none;
+  border-radius: var(--radius) var(--radius) 0 0;
+}
+
+.tools-result-tool {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.tools-result-json {
+  padding: 14px;
+  background: var(--bg-input);
+  border: 1px solid var(--border);
+  border-radius: 0 0 var(--radius) var(--radius);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+  overflow-x: auto;
+  max-height: 500px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  word-break: break-word;
+  margin: 0;
+}
+
+/* Tool call history */
+.tools-history {
+  margin-top: 24px;
+}
+
+.tools-history-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
+}
+
+.tools-clear-btn {
+  font-size: 11px;
+  color: var(--text-muted);
+  background: none;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 3px 10px;
+  cursor: pointer;
+}
+
+.tools-clear-btn:hover {
+  color: var(--text-secondary);
+  border-color: var(--text-muted);
+}
+
+.tools-history-entry {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 6px;
+  overflow: hidden;
+}
+
+.tools-history-entry-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  background: var(--bg-card);
+  transition: background 0.15s;
+}
+
+.tools-history-entry-header:hover {
+  background: var(--bg-hover);
+}
+
+.tools-history-call {
+  flex: 1;
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 12px;
+  color: var(--text-secondary);
+}
+
+.tools-history-json {
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  max-height: 300px;
+}
+
+/* Agent Graph tab */
+.graph-tab {
+  max-width: 900px;
+}
+
+.graph-content {
+  margin-top: 16px;
+}
+
+.graph-info-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.graph-info-card {
+  padding: 14px 18px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+}
+
+.graph-info-label {
+  font-size: 11px;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 4px;
+}
+
+.graph-info-value {
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--text-primary);
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+}
+
+.graph-diagram-section {
+  margin-bottom: 24px;
+}
+
+.graph-diagram-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  margin-bottom: 10px;
+}
+
+.mermaid-container {
+  padding: 24px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  display: flex;
+  justify-content: center;
+  overflow-x: auto;
+}
+
+.mermaid-container svg {
+  max-width: 100%;
+  height: auto;
+}
+
+.graph-tools-section {
+  margin-bottom: 24px;
+}
+
+.graph-tool-list {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.graph-tool-item {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  padding: 8px 14px;
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+
+.graph-tool-item code {
+  font-family: 'JetBrains Mono', 'Fira Code', monospace;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--accent);
+  white-space: nowrap;
+}
+
+.graph-tool-desc {
+  font-size: 12px;
+  color: var(--text-muted);
+}
+
+.graph-mermaid-source {
+  margin-bottom: 24px;
+}
