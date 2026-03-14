@@ -7,11 +7,13 @@ using scripts/build_openlibrary_db.py.
 
 import logging
 import sqlite3
+import time
 from difflib import SequenceMatcher
 from pathlib import Path
+from typing import Any
 
 from .models import BookMatch
-from .product_filter import is_likely_product
+from .product_filter import compute_product_score, is_likely_product
 
 logger = logging.getLogger(__name__)
 
@@ -359,6 +361,272 @@ class LocalBookSearch:
             best_match.matched_title,
         )
         return None
+
+    def match_title_debug(
+        self,
+        input_title: str,
+        limit: int = 10,
+        author_hint: str | None = None,
+    ) -> dict[str, Any]:
+        """Match a title with full debug trace of every processing stage.
+
+        Returns a dict with timing and detail for each stage:
+        product_filter, fts_search, scoring, edition_enrichment, and result.
+
+        Args:
+            input_title: Raw input string.
+            limit: Number of FTS5 candidates per strategy.
+            author_hint: Optional author name for disambiguation.
+
+        Returns:
+            Dict with keys: input_title, stages, total_elapsed_ms.
+        """
+        t_start = time.perf_counter()
+        stages: dict[str, Any] = {}
+
+        # -- Stage 1: Product filter --
+        t0 = time.perf_counter()
+        product_score = compute_product_score(input_title)
+        is_product = is_likely_product(input_title)
+        stages["product_filter"] = {
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            "score": round(product_score, 4),
+            "threshold": 0.40,
+            "is_product": is_product,
+            "verdict": "SKIPPED (product)" if is_product else "PASSED (not a product)",
+        }
+
+        if is_product:
+            stages["result"] = {
+                "matched": False,
+                "decision": None,
+                "reason": "Filtered as non-book product",
+            }
+            return {
+                "input_title": input_title,
+                "stages": stages,
+                "total_elapsed_ms": round(
+                    (time.perf_counter() - t_start) * 1000, 2
+                ),
+            }
+
+        # -- Stage 2: Build search queries --
+        search_queries: list[str] = [input_title]
+        input_lower = input_title.lower()
+        by_idx = input_lower.rfind(" by ")
+        title_part = input_title
+        if by_idx > 0:
+            title_part = input_title[:by_idx].strip()
+            if title_part:
+                search_queries.append(title_part)
+        for sep in [":", " - "]:
+            if sep in title_part:
+                parts = title_part.split(sep, 1)
+                main_title = parts[0].strip()
+                subtitle = parts[1].strip()
+                if main_title and len(main_title) > 2:
+                    search_queries.append(main_title)
+                if subtitle and len(subtitle) > 3:
+                    search_queries.append(subtitle)
+        if author_hint and author_hint.strip():
+            search_queries.append(f"{input_title} {author_hint}")
+
+        # -- Stage 3: FTS search --
+        t0 = time.perf_counter()
+        fts_details: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        all_candidates: list[dict] = []
+
+        for query_text in search_queries:
+            fts_queries = _build_fts_queries(query_text)
+            for fts_q in fts_queries:
+                tq = time.perf_counter()
+                try:
+                    rows = self._conn.execute(
+                        """
+                        SELECT w.key, w.title, w.authors, w.first_publish_year,
+                               w.cover_id, w.subjects, w.description, w.subtitle,
+                               w.subject_people, w.subject_places, w.subject_times,
+                               w.lc_classifications, w.dewey_number, w.first_sentence,
+                               rank
+                        FROM books_fts
+                        JOIN works w ON books_fts.rowid = w.rowid
+                        WHERE books_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?
+                        """,
+                        (fts_q, limit),
+                    ).fetchall()
+                    new_rows = []
+                    for r in rows:
+                        key = r["key"]
+                        if key not in seen_keys:
+                            seen_keys.add(key)
+                            new_rows.append(dict(r))
+                            all_candidates.append(dict(r))
+                    fts_details.append({
+                        "source_query": query_text,
+                        "fts_query": fts_q,
+                        "elapsed_ms": round(
+                            (time.perf_counter() - tq) * 1000, 2
+                        ),
+                        "results_returned": len(rows),
+                        "new_unique": len(new_rows),
+                    })
+                except Exception as exc:
+                    fts_details.append({
+                        "source_query": query_text,
+                        "fts_query": fts_q,
+                        "elapsed_ms": round(
+                            (time.perf_counter() - tq) * 1000, 2
+                        ),
+                        "error": str(exc),
+                        "results_returned": 0,
+                        "new_unique": 0,
+                    })
+
+        stages["fts_search"] = {
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            "search_variants": search_queries,
+            "queries": fts_details,
+            "total_unique_candidates": len(all_candidates),
+        }
+
+        if not all_candidates:
+            stages["scoring"] = {"elapsed_ms": 0, "candidates": []}
+            stages["result"] = {
+                "matched": False,
+                "decision": None,
+                "reason": "No FTS candidates found",
+            }
+            return {
+                "input_title": input_title,
+                "stages": stages,
+                "total_elapsed_ms": round(
+                    (time.perf_counter() - t_start) * 1000, 2
+                ),
+            }
+
+        # -- Stage 4: Score each candidate --
+        t0 = time.perf_counter()
+        scored_candidates: list[dict[str, Any]] = []
+
+        for result in all_candidates:
+            score = self._score_result(
+                input_title, result, author_hint=author_hint
+            )
+            result_title = (result.get("title") or "").strip()
+            result_authors_str = result.get("authors") or ""
+            authors_list = [
+                a.strip() for a in result_authors_str.split(",") if a.strip()
+            ]
+            title_sim = round(
+                _title_similarity(input_title, result_title), 4
+            )
+
+            scored_candidates.append({
+                "work_key": result.get("key", ""),
+                "title": result_title,
+                "authors": authors_list[:3],
+                "first_publish_year": result.get("first_publish_year"),
+                "score": round(score, 4),
+                "title_similarity": title_sim,
+                "subjects": (result.get("subjects") or "")[:200],
+                "description": (result.get("description") or "")[:300],
+                "cover_id": result.get("cover_id"),
+            })
+
+        scored_candidates.sort(key=lambda c: c["score"], reverse=True)
+
+        stages["scoring"] = {
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            "author_hint": author_hint,
+            "candidates": scored_candidates,
+        }
+
+        # -- Stage 5: Decision + edition enrichment --
+        best = scored_candidates[0]
+        best_score = best["score"]
+        best_result = all_candidates[0]
+        for c in all_candidates:
+            if c.get("key") == best["work_key"]:
+                best_result = c
+                break
+
+        authors_str = best_result.get("authors") or ""
+        authors = [a.strip() for a in authors_str.split(",") if a.strip()]
+
+        match_obj = BookMatch(
+            input_title=input_title,
+            matched_title=best["title"],
+            confidence=round(best_score, 4),
+            title_similarity=best["title_similarity"],
+            authors=authors[:3],
+            first_publish_year=best_result.get("first_publish_year"),
+            edition_count=0,
+            isbn=None,
+            raw_doc=best_result,
+        )
+
+        decision = None
+        reason = ""
+        if best_score >= HIGH_CONFIDENCE:
+            decision = "book"
+            reason = f"Score {best_score:.4f} >= HIGH_CONFIDENCE ({HIGH_CONFIDENCE})"
+            match_obj.decision = "book"
+        elif best_score >= MODERATE_CONFIDENCE and authors:
+            decision = "likely_book"
+            reason = (
+                f"Score {best_score:.4f} >= MODERATE_CONFIDENCE "
+                f"({MODERATE_CONFIDENCE}) and has authors"
+            )
+            match_obj.decision = "likely_book"
+        else:
+            parts = []
+            if best_score < MODERATE_CONFIDENCE:
+                parts.append(
+                    f"Score {best_score:.4f} < MODERATE_CONFIDENCE "
+                    f"({MODERATE_CONFIDENCE})"
+                )
+            if not authors:
+                parts.append("No authors on best candidate")
+            reason = "; ".join(parts)
+
+        # Edition enrichment
+        t0 = time.perf_counter()
+        edition_info: dict[str, Any] = {"edition_count": 0}
+        if decision:
+            self._enrich_with_edition(match_obj)
+            edition_info = {
+                "edition_count": match_obj.edition_count,
+                "isbn": match_obj.isbn,
+                "publisher": match_obj.publisher,
+                "number_of_pages": match_obj.number_of_pages,
+                "publish_date": match_obj.publish_date,
+                "physical_format": match_obj.physical_format,
+            }
+        stages["edition_enrichment"] = {
+            "elapsed_ms": round((time.perf_counter() - t0) * 1000, 2),
+            **edition_info,
+        }
+
+        stages["result"] = {
+            "matched": decision is not None,
+            "decision": decision,
+            "confidence": round(best_score, 4),
+            "matched_title": best["title"],
+            "authors": authors[:3],
+            "first_publish_year": best_result.get("first_publish_year"),
+            "reason": reason,
+        }
+
+        return {
+            "input_title": input_title,
+            "stages": stages,
+            "total_elapsed_ms": round(
+                (time.perf_counter() - t_start) * 1000, 2
+            ),
+        }
 
     def _enrich_with_edition(self, match: BookMatch) -> None:
         """Look up edition data for a matched work and populate BookMatch fields.

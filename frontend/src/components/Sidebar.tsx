@@ -15,6 +15,7 @@ interface NavItem {
 const toolsNav: NavItem[] = [
   { id: 'book-matcher', label: 'Book Matcher', icon: '\u{1F50D}' },
   { id: 'photo-import', label: 'Photo Import', icon: '\u{1F4F7}' },
+  { id: 'debug-dashboard', label: 'Debug', icon: '\u{1F41B}' },
 ];
 
 const dataNav: NavItem[] = [

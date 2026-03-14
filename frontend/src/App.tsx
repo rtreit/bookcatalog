@@ -3,6 +3,7 @@ import Layout from './components/Layout';
 import BookMatcher from './pages/BookMatcher';
 import AgentChat from './pages/AgentChat';
 import PhotoImport from './pages/PhotoImport';
+import DebugDashboard from './pages/DebugDashboard';
 import Placeholder from './pages/Placeholder';
 
 const pages: Record<string, { title: string; subtitle: string }> = {
@@ -13,6 +14,10 @@ const pages: Record<string, { title: string; subtitle: string }> = {
   'photo-import': {
     title: 'Photo Import',
     subtitle: 'Identify books from photos of shelves and stacks',
+  },
+  'debug-dashboard': {
+    title: 'Debug Dashboard',
+    subtitle: 'Inspect the full matching pipeline for test orders',
   },
   'database': {
     title: 'Database',
@@ -37,6 +42,7 @@ export default function App() {
     >
       {activePage === 'book-matcher' && <BookMatcher />}
       {activePage === 'photo-import' && <PhotoImport />}
+      {activePage === 'debug-dashboard' && <DebugDashboard />}
       {activePage === 'database' && (
         <Placeholder
           icon={'\u{1F4BE}'}

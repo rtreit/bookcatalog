@@ -148,3 +148,44 @@ async def match_titles(request: MatchRequest) -> MatchResponse:
         max_concurrent=request.max_concurrent,
         source=source,
     )
+
+
+class DebugMatchRequest(BaseModel):
+    titles: list[str] = Field(
+        ...,
+        min_length=1,
+        max_length=200,
+        description="List of title strings to debug-match.",
+    )
+
+
+@router.post("/debug-match")
+async def debug_match_titles(request: DebugMatchRequest) -> dict:
+    """Run match with full debug trace for each title.
+
+    Returns detailed information about every processing stage:
+    product filtering, FTS search queries, candidate scoring,
+    edition enrichment, and the final decision.
+    """
+    if _local_search is None:
+        return {"error": "Local database not available", "results": []}
+
+    t0 = time.monotonic()
+    results = []
+    for title in request.titles:
+        trace = _local_search.match_title_debug(title)
+        results.append(trace)
+
+    return {
+        "results": results,
+        "total": len(results),
+        "elapsed_seconds": round(time.monotonic() - t0, 2),
+    }
+
+
+@router.get("/test-orders")
+async def get_test_orders() -> dict:
+    """Return the list of known test orders for the debug dashboard."""
+    from tests.test_amazon_list import ORDERS
+
+    return {"orders": ORDERS, "total": len(ORDERS)}
