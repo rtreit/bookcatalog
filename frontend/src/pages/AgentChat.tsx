@@ -66,7 +66,18 @@ export default function AgentChat() {
       });
 
       if (!res.ok) {
-        throw new Error(`API returned ${res.status}`);
+        let detail = '';
+        try {
+          const errBody = await res.json();
+          if (errBody.detail) {
+            detail = typeof errBody.detail === 'string'
+              ? errBody.detail
+              : JSON.stringify(errBody.detail, null, 2);
+          }
+        } catch { /* ignore parse errors */ }
+        throw new Error(
+          `API returned ${res.status}${detail ? ': ' + detail : ''}`
+        );
       }
 
       const data: ChatResponse = await res.json();
