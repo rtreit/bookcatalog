@@ -295,14 +295,59 @@ def db_with_ambiguous_titles(tmp_path: Path) -> Path:
             ('/authors/OL1A', 'Lauri Hill'),
             ('/authors/OL2A', 'David Kirk'),
             ('/authors/OL3A', 'Louisa May Alcott'),
-            ('/authors/OL4A', 'Louis Jambor');
+            ('/authors/OL4A', 'Louis Jambor'),
+            ('/authors/OL5A', 'Gene Hill');
 
         INSERT INTO works (key, title, authors, first_publish_year) VALUES
             ('/works/OL1W', 'The Listening Walk', 'Lauri Hill', 1991),
             ('/works/OL2W', 'The listening walk', 'David Kirk', 1995),
             ('/works/OL3W', 'The Listening Walk', NULL, NULL),
             ('/works/OL4W', 'Jos Boys', 'Louisa May Alcott', 1886),
-            ('/works/OL5W', 'JOs Boys', 'Louis Jambor', NULL);
+            ('/works/OL5W', 'JOs Boys', 'Louis Jambor', NULL),
+            ('/works/OL6W', 'A listening walk --and other stories', 'Gene Hill', 1985);
+
+        CREATE VIRTUAL TABLE books_fts USING fts5(
+            title, authors, description,
+            content='works', content_rowid='rowid',
+            tokenize='porter unicode61'
+        );
+
+        INSERT INTO books_fts(rowid, title, authors, description)
+        SELECT rowid, title, COALESCE(authors, ''), COALESCE(description, '')
+        FROM works;
+    """)
+    conn.commit()
+    conn.close()
+    return db_path
+
+
+@pytest.fixture()
+def db_with_title_phrase_edge_cases(tmp_path: Path) -> Path:
+    """Create a database covering raw punctuation and subtitle edge cases."""
+    db_path = tmp_path / "test_phrase_edge_cases.db"
+    conn = sqlite3.connect(str(db_path))
+
+    conn.executescript("""
+        CREATE TABLE authors (key TEXT PRIMARY KEY, name TEXT NOT NULL);
+        CREATE TABLE works (
+            key TEXT PRIMARY KEY, title TEXT NOT NULL, authors TEXT,
+            first_publish_year INTEGER, cover_id INTEGER, subjects TEXT,
+            description TEXT, subtitle TEXT, subject_places TEXT,
+            subject_people TEXT, subject_times TEXT, lc_classifications TEXT,
+            dewey_number TEXT, first_sentence TEXT, links TEXT, excerpts TEXT
+        );
+
+        INSERT INTO authors (key, name) VALUES
+            ('/authors/OL10A', 'Leo Tolstoy'),
+            ('/authors/OL11A', 'Example Author'),
+            ('/authors/OL12A', 'Gene Hill'),
+            ('/authors/OL13A', 'Another Author');
+
+        INSERT INTO works (key, title, authors, first_publish_year) VALUES
+            ('/works/OL10W', 'War & Peace', 'Leo Tolstoy', 1869),
+            ('/works/OL11W', 'War and Peace in Modern Times', 'Example Author', 2001),
+            ('/works/OL12W', 'A listening walk --and other stories', 'Gene Hill', 1985),
+            ('/works/OL13W', 'A Listening Walk', 'Another Author', 1999);
 
         CREATE VIRTUAL TABLE books_fts USING fts5(
             title, authors, description,
@@ -322,25 +367,37 @@ def db_with_ambiguous_titles(tmp_path: Path) -> Path:
 class TestAuthorHintDisambiguation:
     """Tests for author_hint parameter in match_title."""
 
+    def test_search_prefers_exact_title_phrase(
+        self, db_with_ambiguous_titles: Path
+    ) -> None:
+        """search() ranks the exact title phrase above shorter lookalikes."""
+        search = LocalBookSearch(db_with_ambiguous_titles)
+        results = search.search("A Listening Walk", limit=5)
+
+        assert results
+        assert results[0]["key"] == "/works/OL6W"
+        assert results[0]["title"] == "A listening walk --and other stories"
+
     def test_author_hint_selects_correct_author(
         self, db_with_ambiguous_titles: Path
     ) -> None:
         """author_hint picks the matching author when titles are similar."""
         search = LocalBookSearch(db_with_ambiguous_titles)
-        match = search.match_title("A Listening Walk", author_hint="Hill")
+        match = search.match_title("A Listening Walk", author_hint="Gene Hill")
 
         assert match is not None
-        assert "Hill" in ", ".join(match.authors)
+        assert "Gene Hill" in ", ".join(match.authors)
 
-    def test_no_hint_may_pick_wrong_author(
+    def test_no_hint_prefers_exact_title_phrase(
         self, db_with_ambiguous_titles: Path
     ) -> None:
-        """Without author_hint, the match may pick a different author."""
+        """Without an author hint, the exact title phrase still wins."""
         search = LocalBookSearch(db_with_ambiguous_titles)
         match = search.match_title("A Listening Walk")
 
         assert match is not None
-        # Without hint, we just verify we get a match - author may vary
+        assert match.matched_title == "A listening walk --and other stories"
+        assert "Gene Hill" in ", ".join(match.authors)
 
     def test_author_hint_alcott(
         self, db_with_ambiguous_titles: Path
@@ -361,3 +418,27 @@ class TestAuthorHintDisambiguation:
 
         assert match is not None
         assert "Listening Walk" in match.matched_title
+
+
+class TestTitlePhraseSearchBehavior:
+    """Regression tests for title-first local search behavior."""
+
+    def test_raw_phrase_query_preserves_ampersand_title(
+        self, db_with_title_phrase_edge_cases: Path
+    ) -> None:
+        """Exact punctuation titles still beat normalized word rewrites."""
+        search = LocalBookSearch(db_with_title_phrase_edge_cases)
+        results = search.search("War & Peace", limit=5)
+
+        assert results
+        assert results[0]["title"] == "War & Peace"
+
+    def test_full_title_beats_shortened_main_title(
+        self, db_with_title_phrase_edge_cases: Path
+    ) -> None:
+        """Exact full titles outrank shorter main-title lookalikes."""
+        search = LocalBookSearch(db_with_title_phrase_edge_cases)
+        results = search.search("A listening walk --and other stories", limit=5)
+
+        assert results
+        assert results[0]["title"] == "A listening walk --and other stories"

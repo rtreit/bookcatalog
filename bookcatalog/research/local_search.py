@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import BookMatch
+from .openlibrary import normalize_title
 from .product_filter import compute_product_score, is_likely_product
 
 logger = logging.getLogger(__name__)
@@ -30,6 +31,8 @@ _NOISE_WORDS = frozenset({
     "by", "the", "a", "an", "of", "and", "in", "to", "for", "on",
     "with", "at", "from", "or", "is", "it", "as", "be", "was",
 })
+_LEADING_ARTICLES = ("a ", "an ", "the ")
+_MAIN_TITLE_SEPARATORS = (":", " - ", " -- ", "--", " --")
 
 
 def _extract_input_author(input_lower: str) -> str | None:
@@ -62,6 +65,88 @@ def _extract_input_author(input_lower: str) -> str | None:
     return candidate
 
 
+def _strip_leading_article(text: str) -> str:
+    """Remove a leading article for softer title comparisons."""
+    lowered = text.lower()
+    for article in _LEADING_ARTICLES:
+        if lowered.startswith(article):
+            return text[len(article):].strip()
+    return text
+
+
+def _raw_title_variants(title: str) -> list[str]:
+    """Return raw title variants for strict FTS phrase queries."""
+    variants = [title.strip()]
+    for separator in _MAIN_TITLE_SEPARATORS:
+        if separator in title:
+            main = title.split(separator, 1)[0].strip()
+            if main and main not in variants and len(main.split()) >= 2:
+                variants.append(main)
+    return [variant for variant in variants if variant]
+
+
+def _normalized_title_variant_entries(title: str) -> list[tuple[str, bool]]:
+    """Return normalized title variants for matching.
+
+    Each tuple contains the normalized title text and whether it is a
+    shortened main-title fallback rather than the full title.
+    """
+    normalized = normalize_title(title)
+    if not normalized:
+        return []
+
+    variants: list[tuple[str, bool]] = [(normalized, False)]
+    for separator in _MAIN_TITLE_SEPARATORS:
+        if separator in normalized:
+            main = normalized.split(separator, 1)[0].strip()
+            existing = {variant for variant, _ in variants}
+            if main and main not in existing and len(main.split()) >= 2:
+                variants.append((main, True))
+    return variants
+
+
+def _fts_phrase_text(text: str) -> str:
+    """Convert raw title text into an FTS-friendly phrase without rewriting words."""
+    cleaned: list[str] = []
+    for ch in text:
+        if ch.isalnum() or ch in {" ", "'"}:
+            cleaned.append(ch.lower())
+        else:
+            cleaned.append(" ")
+    return " ".join("".join(cleaned).split())
+
+
+def _build_title_fts_queries(text: str, max_tokens: int = 8) -> list[str]:
+    """Build title-focused FTS queries from strictest to broader title match."""
+    title_sources = [text]
+    input_lower = text.lower()
+    by_idx = input_lower.rfind(" by ")
+    if by_idx > 0:
+        title_only = text[:by_idx].strip()
+        if title_only:
+            title_sources.append(title_only)
+
+    queries: list[str] = []
+    for title_source in title_sources:
+        for variant in _raw_title_variants(title_source):
+            escaped = _fts_phrase_text(variant).replace('"', " ").strip()
+            if len(escaped.split()) >= 2:
+                queries.append(f'title:"{escaped}"')
+
+        tokens = _tokenize_for_fts(title_source)[:max_tokens]
+        if len(tokens) >= 2:
+            title_query = " AND ".join(f'"{token}"' for token in tokens)
+            queries.append(f"title:({title_query})")
+
+    seen: set[str] = set()
+    unique: list[str] = []
+    for query in queries:
+        if query not in seen:
+            seen.add(query)
+            unique.append(query)
+    return unique
+
+
 def _tokenize_for_fts(text: str) -> list[str]:
     """Extract useful tokens from text for FTS5 queries.
 
@@ -91,9 +176,11 @@ def _build_fts_queries(text: str, max_tokens: int = 8) -> list[str]:
     """Build FTS5 query strings with cascading specificity.
 
     Returns queries from most specific to broadest:
-    1. AND on title tokens only (if "by Author" detected)
-    2. AND on all tokens (capped at max_tokens)
-    3. OR on all tokens (capped at max_tokens)
+    1. Exact title phrase queries against the title column
+    2. Title-column AND queries
+    3. Title + author AND query (if "by Author" detected)
+    4. AND on all tokens (capped at max_tokens)
+    5. OR on all tokens (capped at max_tokens)
 
     Capping tokens avoids broad OR queries against product descriptions
     that would scan too much of the FTS index and take seconds.
@@ -113,7 +200,7 @@ def _build_fts_queries(text: str, max_tokens: int = 8) -> list[str]:
     # Cap tokens to limit query breadth
     tokens = tokens[:max_tokens]
 
-    queries = []
+    queries = _build_title_fts_queries(text, max_tokens=max_tokens)
 
     # If input looks like "Title by Author", extract title tokens
     input_lower = text.lower()
@@ -154,8 +241,36 @@ def _build_fts_queries(text: str, max_tokens: int = 8) -> list[str]:
 
 
 def _title_similarity(a: str, b: str) -> float:
-    """Compute normalized similarity between two title strings."""
-    return SequenceMatcher(None, a.lower().strip(), b.lower().strip()).ratio()
+    """Compute normalized similarity between two title strings.
+
+    The comparison uses normalized title variants and slightly discounted
+    article-insensitive matching so exact title phrase matches outrank
+    shorter article-less variants.
+    """
+    a_variants = _normalized_title_variant_entries(a)
+    b_variants = _normalized_title_variant_entries(b)
+    if not a_variants or not b_variants:
+        return 0.0
+
+    best = 0.0
+    for a_variant, a_shortened in a_variants:
+        for b_variant, b_shortened in b_variants:
+            similarity = SequenceMatcher(None, a_variant, b_variant).ratio()
+            if a_shortened or b_shortened:
+                similarity -= 0.08
+            best = max(best, similarity)
+
+            a_articleless = _strip_leading_article(a_variant)
+            b_articleless = _strip_leading_article(b_variant)
+            if a_articleless != a_variant or b_articleless != b_variant:
+                articleless = (
+                    SequenceMatcher(None, a_articleless, b_articleless).ratio() - 0.10
+                )
+                if a_shortened or b_shortened:
+                    articleless -= 0.05
+                best = max(best, articleless)
+
+    return max(0.0, min(best, 1.0))
 
 
 class LocalBookSearch:
@@ -185,8 +300,10 @@ class LocalBookSearch:
     def search(self, query: str, limit: int = 10) -> list[dict]:
         """Search for books matching a free-text query.
 
-        Uses AND-first strategy: tries an AND query first for speed and
-        precision, falls back to OR for broader recall if needed.
+        Uses a title-first strategy: tries strict title phrase and title-only
+        queries first, then broadens to general token queries only when needed.
+        The first strategy that yields results is reranked by title fidelity
+        before returning the top matches.
 
         Args:
             query: Search string (title, author, or combination).
@@ -202,6 +319,7 @@ class LocalBookSearch:
         if not fts_queries:
             return []
 
+        fetch_limit = max(limit, 25)
         for fts_query in fts_queries:
             try:
                 rows = self._conn.execute(
@@ -217,13 +335,21 @@ class LocalBookSearch:
                     ORDER BY rank
                     LIMIT ?
                     """,
-                    (fts_query, limit),
+                    (fts_query, fetch_limit),
                 ).fetchall()
             except Exception:
                 continue
 
             if rows:
-                return [dict(r) for r in rows]
+                ranked_rows = [dict(r) for r in rows]
+                ranked_rows.sort(
+                    key=lambda row: (
+                        self._score_result(query, row),
+                        -(float(row.get("rank") or 0.0)),
+                    ),
+                    reverse=True,
+                )
+                return ranked_rows[:limit]
 
         return []
 
@@ -436,6 +562,7 @@ class LocalBookSearch:
         fts_details: list[dict[str, Any]] = []
         seen_keys: set[str] = set()
         all_candidates: list[dict] = []
+        fetch_limit = max(limit, 25)
 
         for query_text in search_queries:
             fts_queries = _build_fts_queries(query_text)
@@ -455,7 +582,7 @@ class LocalBookSearch:
                         ORDER BY rank
                         LIMIT ?
                         """,
-                        (fts_q, limit),
+                        (fts_q, fetch_limit),
                     ).fetchall()
                     new_rows = []
                     for r in rows:
@@ -473,6 +600,8 @@ class LocalBookSearch:
                         "results_returned": len(rows),
                         "new_unique": len(new_rows),
                     })
+                    if rows:
+                        break
                 except Exception as exc:
                     fts_details.append({
                         "source_query": query_text,
