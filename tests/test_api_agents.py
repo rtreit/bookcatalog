@@ -251,6 +251,68 @@ class TestAnalyzePhotoEndpoint:
         assert "too dark" in data["error"]
 
 
+class TestBenchmarkEndpoints:
+    """Tests for the photo benchmark API endpoints."""
+
+    @patch("bookcatalog.agents.vision_benchmark.list_benchmark_cases")
+    def test_benchmark_cases(self, mock_list_cases) -> None:
+        """Benchmark cases endpoint returns dashboard metadata."""
+        mock_list_cases.return_value = {
+            "cases": [{"id": "8-books-shelf", "name": "8 Books Shelf"}],
+            "models": [{"model": "gpt-5.4", "label": "GPT-5.4"}],
+            "pricing_source": "test source",
+        }
+
+        response = client.get("/api/agents/benchmark-cases")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["cases"][0]["id"] == "8-books-shelf"
+        assert data["models"][0]["model"] == "gpt-5.4"
+        assert data["pricing_source"] == "test source"
+
+    @patch("bookcatalog.agents.vision_benchmark.run_photo_benchmark", new_callable=AsyncMock)
+    def test_benchmark_photo(self, mock_run_benchmark: AsyncMock) -> None:
+        """Benchmark photo endpoint forwards the selected case and models."""
+        mock_run_benchmark.return_value = {
+            "case": {"id": "8-books-shelf"},
+            "runs": [
+                {
+                    "requested_model": "gpt-5.4",
+                    "resolved_model": "gpt-5.4-2026-03-05",
+                    "elapsed_ms": 30234.0,
+                    "error": None,
+                }
+            ],
+        }
+
+        response = client.post("/api/agents/benchmark-photo", json={
+            "case_id": "8-books-shelf",
+            "models": [
+                {
+                    "model": "gpt-5.4",
+                    "reasoning_effort": "none",
+                    "verbosity": "low",
+                }
+            ],
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["case"]["id"] == "8-books-shelf"
+        assert data["runs"][0]["requested_model"] == "gpt-5.4"
+        mock_run_benchmark.assert_awaited_once_with(
+            case_id="8-books-shelf",
+            models=[
+                {
+                    "model": "gpt-5.4",
+                    "reasoning_effort": "none",
+                    "verbosity": "low",
+                }
+            ],
+        )
+
+
 class TestSampleMCPServer:
     """Tests for the sample MCP server tools."""
 

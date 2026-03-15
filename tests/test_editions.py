@@ -341,13 +341,16 @@ def db_with_title_phrase_edge_cases(tmp_path: Path) -> Path:
             ('/authors/OL10A', 'Leo Tolstoy'),
             ('/authors/OL11A', 'Example Author'),
             ('/authors/OL12A', 'Gene Hill'),
-            ('/authors/OL13A', 'Another Author');
+            ('/authors/OL13A', 'Another Author'),
+            ('/authors/OL14A', 'Patti Callahan Henry');
 
         INSERT INTO works (key, title, authors, first_publish_year) VALUES
             ('/works/OL10W', 'War & Peace', 'Leo Tolstoy', 1869),
             ('/works/OL11W', 'War and Peace in Modern Times', 'Example Author', 2001),
             ('/works/OL12W', 'A listening walk --and other stories', 'Gene Hill', 1985),
-            ('/works/OL13W', 'A Listening Walk', 'Another Author', 1999);
+            ('/works/OL13W', 'A Listening Walk', 'Another Author', 1999),
+            ('/works/OL14W', 'Secret Book of Flora Lea', 'Patti Callahan Henry', 2023),
+            ('/works/OL15W', 'The Secret Book of Flora Lea by Patti Callahan Henry', NULL, NULL);
 
         CREATE VIRTUAL TABLE books_fts USING fts5(
             title, authors, description,
@@ -442,3 +445,28 @@ class TestTitlePhraseSearchBehavior:
 
         assert results
         assert results[0]["title"] == "A listening walk --and other stories"
+
+    def test_articleless_title_phrase_recovers_correct_work(
+        self, db_with_title_phrase_edge_cases: Path
+    ) -> None:
+        """Leading-article variants still find the canonical work."""
+        search = LocalBookSearch(db_with_title_phrase_edge_cases)
+        results = search.search("The Secret Book of Flora Lea", limit=5)
+
+        assert results
+        assert results[0]["title"] == "Secret Book of Flora Lea"
+        assert results[0]["authors"] == "Patti Callahan Henry"
+
+    def test_author_hint_prefers_articleless_flora_lea_match(
+        self, db_with_title_phrase_edge_cases: Path
+    ) -> None:
+        """match_title uses articleless title variants before broad fallback."""
+        search = LocalBookSearch(db_with_title_phrase_edge_cases)
+        match = search.match_title(
+            "The Secret Book of Flora Lea",
+            author_hint="Patti Callahan Henry",
+        )
+
+        assert match is not None
+        assert match.matched_title == "Secret Book of Flora Lea"
+        assert "Patti Callahan Henry" in ", ".join(match.authors)

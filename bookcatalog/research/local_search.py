@@ -75,15 +75,31 @@ def _strip_leading_article(text: str) -> str:
     return text
 
 
+def _append_unique_variant(variants: list[str], value: str) -> None:
+    """Append a title variant when it is non-empty and not already present."""
+    cleaned = value.strip()
+    if cleaned and cleaned not in variants:
+        variants.append(cleaned)
+
+
 def _raw_title_variants(title: str) -> list[str]:
     """Return raw title variants for strict FTS phrase queries."""
-    variants = [title.strip()]
+    variants: list[str] = []
+    base_title = title.strip()
+    _append_unique_variant(variants, base_title)
+    articleless = _strip_leading_article(base_title)
+    if articleless != base_title:
+        _append_unique_variant(variants, articleless)
+
     for separator in _MAIN_TITLE_SEPARATORS:
         if separator in title:
             main = title.split(separator, 1)[0].strip()
-            if main and main not in variants and len(main.split()) >= 2:
-                variants.append(main)
-    return [variant for variant in variants if variant]
+            if len(main.split()) >= 2:
+                _append_unique_variant(variants, main)
+                articleless_main = _strip_leading_article(main)
+                if articleless_main != main:
+                    _append_unique_variant(variants, articleless_main)
+    return variants
 
 
 def _normalized_title_variant_entries(title: str) -> list[tuple[str, bool]]:
@@ -241,6 +257,11 @@ def _build_fts_queries(text: str, max_tokens: int = 8) -> list[str]:
     return unique
 
 
+def _query_is_title_focused(fts_query: str) -> bool:
+    """Return True when an FTS query is scoped to the title column."""
+    return fts_query.startswith("title:")
+
+
 def _title_similarity(a: str, b: str) -> float:
     """Compute normalized similarity between two title strings.
 
@@ -322,8 +343,14 @@ class LocalBookSearch:
             return []
 
         fetch_limit = max(limit, 25)
+        collected_rows: list[dict[str, Any]] = []
+        seen_keys: set[str] = set()
+        title_hits_found = False
+
         with self._lock:
             for fts_query in fts_queries:
+                if title_hits_found and not _query_is_title_focused(fts_query):
+                    break
                 try:
                     rows = self._conn.execute(
                         """
@@ -344,15 +371,31 @@ class LocalBookSearch:
                     continue
 
                 if rows:
-                    ranked_rows = [dict(r) for r in rows]
-                    ranked_rows.sort(
-                        key=lambda row: (
-                            self._score_result(query, row),
-                            -(float(row.get("rank") or 0.0)),
-                        ),
-                        reverse=True,
-                    )
-                    return ranked_rows[:limit]
+                    is_title_query = _query_is_title_focused(fts_query)
+                    if is_title_query:
+                        title_hits_found = True
+
+                    for row in rows:
+                        row_dict = dict(row)
+                        key = str(row_dict.get("key") or "")
+                        if key and key in seen_keys:
+                            continue
+                        if key:
+                            seen_keys.add(key)
+                        collected_rows.append(row_dict)
+
+                    if not is_title_query:
+                        break
+
+        if collected_rows:
+            collected_rows.sort(
+                key=lambda row: (
+                    self._score_result(query, row),
+                    -(float(row.get("rank") or 0.0)),
+                ),
+                reverse=True,
+            )
+            return collected_rows[:limit]
 
         return []
 
@@ -570,7 +613,10 @@ class LocalBookSearch:
 
         for query_text in search_queries:
             fts_queries = _build_fts_queries(query_text)
+            title_hits_found = False
             for fts_q in fts_queries:
+                if title_hits_found and not _query_is_title_focused(fts_q):
+                    break
                 tq = time.perf_counter()
                 try:
                     with self._lock:
@@ -605,7 +651,9 @@ class LocalBookSearch:
                         "results_returned": len(rows),
                         "new_unique": len(new_rows),
                     })
-                    if rows:
+                    if rows and _query_is_title_focused(fts_q):
+                        title_hits_found = True
+                    if rows and not _query_is_title_focused(fts_q):
                         break
                 except Exception as exc:
                     fts_details.append({

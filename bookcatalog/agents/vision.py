@@ -8,6 +8,7 @@ Uses a vision-capable model via LangGraph with native local book tools to:
 import base64
 import json
 import logging
+import time
 from pathlib import Path
 from typing import Any
 
@@ -65,6 +66,9 @@ async def run_vision_agent(
     image_data: bytes,
     media_type: str = "image/jpeg",
     tools: list | None = None,
+    model_name: str | None = None,
+    reasoning_effort: str | None = None,
+    verbosity: str | None = None,
 ) -> list[dict[str, Any]]:
     """Analyze a photo of books and match identified titles.
 
@@ -72,20 +76,53 @@ async def run_vision_agent(
         image_data: Raw image bytes.
         media_type: MIME type of the image (e.g., "image/jpeg", "image/png").
         tools: Optional pre-loaded tools (for testing).
+        model_name: Optional model override for benchmarking.
+        reasoning_effort: Optional GPT-5 reasoning effort override.
+        verbosity: Optional GPT-5 verbosity override.
 
     Returns:
         List of identified and matched books.
     """
-    model = ChatOpenAI(
-        model=VISION_MODEL,
-        api_key=OPENAI_API_KEY,
-        temperature=0,
+    details = await run_vision_agent_detailed(
+        image_data=image_data,
+        media_type=media_type,
+        tools=tools,
+        model_name=model_name,
+        reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
+    )
+    if isinstance(details, list):
+        return details
+    return details["books"]
+
+async def run_vision_agent_detailed(
+    image_data: bytes,
+    media_type: str = "image/jpeg",
+    tools: list | None = None,
+    model_name: str | None = None,
+    reasoning_effort: str | None = None,
+    verbosity: str | None = None,
+) -> dict[str, Any]:
+    """Analyze a photo and return parsed books plus raw diagnostics."""
+    model = _build_vision_model(
+        model_name=model_name,
+        reasoning_effort=reasoning_effort,
+        verbosity=verbosity,
     )
 
     if tools is None:
         tools = get_agent_tools()
 
-    return await _invoke_vision_agent(model, tools, image_data, media_type)
+    details = await _invoke_vision_agent(model, tools, image_data, media_type)
+    if isinstance(details, list):
+        return {
+            "books": details,
+            "raw_response": "",
+            "elapsed_ms": 0.0,
+            "usage": [],
+            "model": str(model_name or VISION_MODEL),
+        }
+    return details
 
 
 async def analyze_photo_file(
@@ -118,18 +155,128 @@ async def analyze_photo_file(
     return await run_vision_agent(path.read_bytes(), media_type, tools)
 
 
+def _build_vision_model(
+    model_name: str | None = None,
+    reasoning_effort: str | None = None,
+    verbosity: str | None = None,
+) -> ChatOpenAI:
+    """Create the configured vision model."""
+    kwargs: dict[str, Any] = {
+        "model": model_name or VISION_MODEL,
+        "api_key": OPENAI_API_KEY,
+        "temperature": 0,
+    }
+    if reasoning_effort:
+        kwargs["reasoning"] = {"effort": reasoning_effort}
+    if verbosity:
+        kwargs["verbosity"] = verbosity
+    return ChatOpenAI(**kwargs)
+
+
+def _message_content_to_text(content: Any) -> str:
+    """Convert LangChain message content into plain text."""
+    if isinstance(content, str):
+        return content
+
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text")
+                if text:
+                    parts.append(str(text))
+        return "\n".join(part for part in parts if part)
+
+    return str(content)
+
+
+def _extract_final_ai_text(messages: list[Any]) -> str:
+    """Find the final AI text response from an agent run."""
+    for message in reversed(messages):
+        if getattr(message, "type", None) != "ai":
+            continue
+        text = _message_content_to_text(getattr(message, "content", None)).strip()
+        if text:
+            return text
+
+    if not messages:
+        return ""
+    last_message = messages[-1]
+    return _message_content_to_text(
+        getattr(last_message, "content", last_message)
+    ).strip()
+
+
+def _normalize_usage_record(payload: dict[str, Any]) -> dict[str, Any]:
+    """Normalize usage metadata across ChatOpenAI response formats."""
+    if "input_tokens" in payload:
+        return {
+            "input_tokens": int(payload.get("input_tokens", 0) or 0),
+            "output_tokens": int(payload.get("output_tokens", 0) or 0),
+            "total_tokens": int(payload.get("total_tokens", 0) or 0),
+            "input_token_details": dict(payload.get("input_token_details") or {}),
+            "output_token_details": dict(payload.get("output_token_details") or {}),
+        }
+
+    prompt_details = dict(payload.get("prompt_tokens_details") or {})
+    completion_details = dict(payload.get("completion_tokens_details") or {})
+    return {
+        "input_tokens": int(payload.get("prompt_tokens", 0) or 0),
+        "output_tokens": int(payload.get("completion_tokens", 0) or 0),
+        "total_tokens": int(payload.get("total_tokens", 0) or 0),
+        "input_token_details": {
+            "audio": int(prompt_details.get("audio_tokens", 0) or 0),
+            "cache_read": int(prompt_details.get("cached_tokens", 0) or 0),
+        },
+        "output_token_details": {
+            "audio": int(completion_details.get("audio_tokens", 0) or 0),
+            "reasoning": int(completion_details.get("reasoning_tokens", 0) or 0),
+        },
+    }
+
+
+def _extract_usage_records(messages: list[Any]) -> list[dict[str, Any]]:
+    """Extract normalized usage metadata from AI messages."""
+    usage_records: list[dict[str, Any]] = []
+    for message in messages:
+        if getattr(message, "type", None) != "ai":
+            continue
+        usage = getattr(message, "usage_metadata", None)
+        if usage:
+            usage_records.append(_normalize_usage_record(dict(usage)))
+            continue
+        response_metadata = getattr(message, "response_metadata", None) or {}
+        token_usage = response_metadata.get("token_usage")
+        if token_usage:
+            usage_records.append(_normalize_usage_record(dict(token_usage)))
+    return usage_records
+
+
+def _extract_model_name(messages: list[Any], fallback: str) -> str:
+    """Extract the concrete model snapshot used by the API."""
+    for message in messages:
+        response_metadata = getattr(message, "response_metadata", None) or {}
+        model_name = response_metadata.get("model_name")
+        if model_name:
+            return str(model_name)
+    return fallback
+
+
 async def _invoke_vision_agent(
     model: ChatOpenAI,
     tools: list,
     image_data: bytes,
     media_type: str,
-) -> list[dict[str, Any]]:
-    """Create and invoke the vision agent."""
+) -> dict[str, Any]:
+    """Create and invoke the vision agent with diagnostics."""
     agent = create_agent(model, tools, system_prompt=SYSTEM_PROMPT)
 
     b64_image = base64.b64encode(image_data).decode("utf-8")
     image_url = f"data:{media_type};base64,{b64_image}"
 
+    t0 = time.perf_counter()
     result = await agent.ainvoke({
         "messages": [
             {
@@ -150,35 +297,40 @@ async def _invoke_vision_agent(
             },
         ],
     }, config={"recursion_limit": 20})
+    elapsed_ms = round((time.perf_counter() - t0) * 1000, 1)
 
-    last_message = result["messages"][-1]
-    content = (
-        last_message.content
-        if hasattr(last_message, "content") and last_message.content is not None
-        else str(last_message)
+    messages = result["messages"]
+    content = _extract_final_ai_text(messages)
+    usage_records = _extract_usage_records(messages)
+    resolved_model = _extract_model_name(
+        messages,
+        str(getattr(model, "model_name", None) or getattr(model, "model", VISION_MODEL)),
     )
-
-    # When the agent ends on a tool call, content may be empty or the
-    # last message may be a tool response rather than an AI message.
-    # Walk backwards to find the final AI text response.
-    if not content or content == str(last_message):
-        for msg in reversed(result["messages"]):
-            if hasattr(msg, "content") and msg.content and hasattr(msg, "type"):
-                if msg.type == "ai" and isinstance(msg.content, str):
-                    content = msg.content
-                    break
 
     if not content:
         logger.warning("Vision agent returned no text content")
-        return [
+        books = [
             {
                 "extracted_title": None,
                 "error": "Vision agent did not return a text response",
-                "raw_response": str(result["messages"][-1])[:500],
+                "raw_response": str(messages[-1])[:500] if messages else "",
             }
         ]
+        return {
+            "books": books,
+            "raw_response": "",
+            "elapsed_ms": elapsed_ms,
+            "usage": usage_records,
+            "model": resolved_model,
+        }
 
-    return _parse_vision_response(content)
+    return {
+        "books": _parse_vision_response(content),
+        "raw_response": content,
+        "elapsed_ms": elapsed_ms,
+        "usage": usage_records,
+        "model": resolved_model,
+    }
 
 
 def _parse_vision_response(content: str | None) -> list[dict[str, Any]]:

@@ -1,6 +1,7 @@
-"""Agent API endpoints for chat and photo analysis."""
+"""Agent API endpoints for chat, photo analysis, and benchmarking."""
 
 import logging
+from typing import Any
 
 from fastapi import APIRouter, File, UploadFile
 from pydantic import BaseModel, Field, model_validator
@@ -76,6 +77,21 @@ class PhotoResponse(BaseModel):
     total_identified: int = 0
     total_matched: int = 0
     error: str | None = None
+
+
+class BenchmarkModelRequest(BaseModel):
+    """Configuration for one benchmarked model run."""
+
+    model: str = Field(min_length=1, max_length=100)
+    reasoning_effort: str | None = Field(default=None, max_length=20)
+    verbosity: str | None = Field(default=None, max_length=20)
+
+
+class PhotoBenchmarkRequest(BaseModel):
+    """Request payload for photo benchmark runs."""
+
+    case_id: str = Field(min_length=1, max_length=100)
+    models: list[BenchmarkModelRequest] = Field(min_length=1, max_length=8)
 
 
 @router.post("/chat", response_model=ChatResponse)
@@ -182,3 +198,29 @@ async def analyze_photo(file: UploadFile = File(...)) -> PhotoResponse:
         total_identified=len(books),
         total_matched=matched_count,
     )
+
+
+@router.get("/benchmark-cases")
+async def benchmark_cases() -> dict[str, Any]:
+    """Return available photo benchmark cases and recommended models."""
+    from bookcatalog.agents.vision_benchmark import list_benchmark_cases
+
+    return list_benchmark_cases()
+
+
+@router.post("/benchmark-photo")
+async def benchmark_photo(request: PhotoBenchmarkRequest) -> dict[str, Any]:
+    """Run a built-in photo benchmark across one or more models."""
+    from bookcatalog.agents.vision_benchmark import run_photo_benchmark
+
+    try:
+        return await run_photo_benchmark(
+            case_id=request.case_id,
+            models=[model.model_dump() for model in request.models],
+        )
+    except (FileNotFoundError, ValueError) as exc:
+        logger.warning("Photo benchmark request failed: %s", exc)
+        return {"error": str(exc), "runs": []}
+    except Exception as exc:
+        logger.exception("Photo benchmark error")
+        return {"error": f"Photo benchmark error: {exc}", "runs": []}

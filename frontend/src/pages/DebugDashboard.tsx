@@ -90,7 +90,117 @@ interface AgentGraphInfo {
   tools: string[];
 }
 
-type TabId = 'pipeline' | 'tools' | 'graph';
+interface BenchmarkExpectedBook {
+  label: string;
+  extracted_aliases: string[];
+  matched_aliases: string[];
+  author_aliases: string[];
+  must_match: boolean;
+}
+
+interface BenchmarkCaseInfo {
+  id: string;
+  name: string;
+  description: string;
+  image_path: string;
+  expected_books: BenchmarkExpectedBook[];
+}
+
+interface BenchmarkModelPreset {
+  model: string;
+  label: string;
+  selected: boolean;
+  reasoning_effort?: string;
+  verbosity?: string;
+  reasoning_options: string[];
+  verbosity_options: string[];
+  pricing?: {
+    input: number;
+    cached_input: number;
+    output: number;
+  };
+}
+
+interface BenchmarkUsageSummary {
+  calls: number;
+  input_tokens: number;
+  cached_input_tokens: number;
+  billable_input_tokens: number;
+  output_tokens: number;
+  reasoning_tokens: number;
+  total_tokens: number;
+}
+
+interface BenchmarkCostSummary {
+  pricing_model?: string | null;
+  estimated_total_cost_usd?: number | null;
+  estimated_input_cost_usd?: number;
+  estimated_cached_input_cost_usd?: number;
+  estimated_output_cost_usd?: number;
+}
+
+interface BenchmarkPrediction {
+  extracted_title?: string | null;
+  extracted_author?: string | null;
+  matched_title?: string | null;
+  matched_authors?: string[];
+  notes?: string;
+}
+
+interface BenchmarkPerBookResult {
+  label: string;
+  visual_ok: boolean;
+  match_ok: boolean;
+  author_ok: boolean;
+  prediction?: BenchmarkPrediction | null;
+}
+
+interface BenchmarkEvaluation {
+  expected_count: number;
+  predicted_count: number;
+  identified_count: number;
+  matched_count: number;
+  author_count: number;
+  overall_score: number;
+  missed_labels: string[];
+  mismatch_labels: string[];
+  per_book: BenchmarkPerBookResult[];
+  unexpected_predictions: Array<{
+    extracted_title?: string | null;
+    matched_title?: string | null;
+    notes?: string;
+  }>;
+}
+
+interface BenchmarkRun {
+  requested_model: string;
+  resolved_model: string;
+  reasoning_effort?: string | null;
+  verbosity?: string | null;
+  elapsed_ms: number;
+  usage: BenchmarkUsageSummary;
+  cost: BenchmarkCostSummary;
+  books: ToolResult[];
+  raw_response: string;
+  evaluation: BenchmarkEvaluation;
+  error?: string | null;
+}
+
+interface BenchmarkMetadataResponse {
+  cases: BenchmarkCaseInfo[];
+  models: BenchmarkModelPreset[];
+  pricing_source?: string;
+  error?: string;
+}
+
+interface BenchmarkResponse {
+  case?: BenchmarkCaseInfo;
+  runs: BenchmarkRun[];
+  pricing_source?: string;
+  error?: string;
+}
+
+type TabId = 'pipeline' | 'tools' | 'graph' | 'benchmark';
 
 // ---------------------------------------------------------------------------
 // Shared sub-components
@@ -790,6 +900,399 @@ function HistoryEntry({ entry }: { entry: { tool: ToolName; params: string; resu
 }
 
 // ---------------------------------------------------------------------------
+// Tab: Benchmark
+// ---------------------------------------------------------------------------
+
+function formatDuration(elapsedMs: number): string {
+  if (elapsedMs >= 1000) {
+    return `${(elapsedMs / 1000).toFixed(1)}s`;
+  }
+  return `${elapsedMs.toFixed(0)}ms`;
+}
+
+function formatUsd(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) {
+    return '(unknown)';
+  }
+  if (value < 0.01) {
+    return `$${value.toFixed(4)}`;
+  }
+  return `$${value.toFixed(2)}`;
+}
+
+function BenchmarkTab() {
+  const [cases, setCases] = useState<BenchmarkCaseInfo[]>([]);
+  const [models, setModels] = useState<BenchmarkModelPreset[]>([]);
+  const [selectedCaseId, setSelectedCaseId] = useState('');
+  const [pricingSource, setPricingSource] = useState<string>('');
+  const [loadingMeta, setLoadingMeta] = useState(true);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [result, setResult] = useState<BenchmarkResponse | null>(null);
+
+  const loadMetadata = useCallback(async () => {
+    setLoadingMeta(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/agents/benchmark-cases');
+      const data: BenchmarkMetadataResponse = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `API returned ${res.status}`);
+      }
+      setCases(data.cases || []);
+      setModels(data.models || []);
+      setPricingSource(data.pricing_source || '');
+      if ((data.cases || []).length > 0) {
+        setSelectedCaseId(prev => prev || data.cases[0].id);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load benchmark cases');
+    } finally {
+      setLoadingMeta(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadMetadata();
+  }, [loadMetadata]);
+
+  const selectedCase = cases.find(item => item.id === selectedCaseId) || null;
+  const selectedModels = models.filter(model => model.selected);
+
+  const updateModel = (
+    modelName: string,
+    updates: Partial<BenchmarkModelPreset>
+  ) => {
+    setModels(prev =>
+      prev.map(model => (
+        model.model === modelName
+          ? { ...model, ...updates }
+          : model
+      ))
+    );
+  };
+
+  const runBenchmark = async () => {
+    if (!selectedCaseId || selectedModels.length === 0) {
+      return;
+    }
+
+    setRunning(true);
+    setError(null);
+    setResult(null);
+
+    try {
+      const payload = {
+        case_id: selectedCaseId,
+        models: selectedModels.map(model => ({
+          model: model.model,
+          reasoning_effort: model.reasoning_effort || undefined,
+          verbosity: model.verbosity || undefined,
+        })),
+      };
+
+      const res = await fetch('/api/agents/benchmark-photo', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      const data: BenchmarkResponse = await res.json();
+      if (!res.ok || data.error) {
+        throw new Error(data.error || `API returned ${res.status}`);
+      }
+      setResult(data);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Benchmark request failed');
+    } finally {
+      setRunning(false);
+    }
+  };
+
+  return (
+    <div className="benchmark-tab">
+      <div className="tools-description">
+        Run built-in photo-analysis benchmark cases against multiple vision models.
+        Each run records latency, token usage, estimated cost, parsed books, and
+        title-match fidelity against expected results.
+      </div>
+
+      {loadingMeta && (
+        <div className="debug-loading">
+          <div className="spinner" />
+          <div>Loading benchmark metadata...</div>
+        </div>
+      )}
+
+      {error && <div className="debug-error">{error}</div>}
+
+      {!loadingMeta && !error && (
+        <>
+          <div className="benchmark-controls">
+            <div className="benchmark-control-card">
+              <label className="tools-label" htmlFor="benchmark-case-select">Benchmark case</label>
+              <select
+                id="benchmark-case-select"
+                className="tools-input"
+                value={selectedCaseId}
+                onChange={e => setSelectedCaseId(e.target.value)}
+                disabled={running}
+              >
+                {cases.map(item => (
+                  <option key={item.id} value={item.id}>
+                    {item.name}
+                  </option>
+                ))}
+              </select>
+              {selectedCase && (
+                <>
+                  <div className="benchmark-case-description">{selectedCase.description}</div>
+                  <div className="benchmark-case-path">{selectedCase.image_path}</div>
+                  <div className="benchmark-expected-list">
+                    {selectedCase.expected_books.map(book => (
+                      <span key={book.label} className="benchmark-expected-chip">
+                        {book.label}
+                      </span>
+                    ))}
+                  </div>
+                </>
+              )}
+            </div>
+
+            <div className="benchmark-control-card">
+              <div className="benchmark-section-title">Models</div>
+              <div className="benchmark-model-list">
+                {models.map(model => (
+                  <div key={model.model} className={`benchmark-model-card ${model.selected ? 'selected' : ''}`}>
+                    <label className="benchmark-model-header">
+                      <input
+                        type="checkbox"
+                        checked={model.selected}
+                        onChange={e => updateModel(model.model, { selected: e.target.checked })}
+                        disabled={running}
+                      />
+                      <div>
+                        <div className="benchmark-model-name">{model.label}</div>
+                        <div className="benchmark-model-key">{model.model}</div>
+                      </div>
+                    </label>
+
+                    {model.pricing && (
+                      <div className="benchmark-pricing">
+                        <span>In ${model.pricing.input}/1M</span>
+                        <span>Cached ${model.pricing.cached_input}/1M</span>
+                        <span>Out ${model.pricing.output}/1M</span>
+                      </div>
+                    )}
+
+                    {model.reasoning_options.length > 0 && (
+                      <div className="tools-input-row">
+                        <label className="tools-label">Reasoning</label>
+                        <select
+                          className="tools-input"
+                          value={model.reasoning_effort || ''}
+                          onChange={e => updateModel(model.model, { reasoning_effort: e.target.value })}
+                          disabled={running || !model.selected}
+                        >
+                          {model.reasoning_options.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+
+                    {model.verbosity_options.length > 0 && (
+                      <div className="tools-input-row">
+                        <label className="tools-label">Verbosity</label>
+                        <select
+                          className="tools-input"
+                          value={model.verbosity || ''}
+                          onChange={e => updateModel(model.model, { verbosity: e.target.value })}
+                          disabled={running || !model.selected}
+                        >
+                          {model.verbosity_options.map(option => (
+                            <option key={option} value={option}>
+                              {option}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+
+              {pricingSource && (
+                <div className="benchmark-pricing-source">
+                  Cost estimates use standard token pricing from {pricingSource}.
+                </div>
+              )}
+
+              <button
+                className="matcher-btn"
+                onClick={runBenchmark}
+                disabled={running || !selectedCaseId || selectedModels.length === 0}
+              >
+                {running ? 'Running benchmark...' : `Run benchmark for ${selectedModels.length} model(s)`}
+              </button>
+            </div>
+          </div>
+
+          {running && (
+            <div className="debug-loading">
+              <div className="spinner" />
+              <div>Running photo benchmark...</div>
+              <div style={{ fontSize: 13, marginTop: 4, color: 'var(--text-muted)' }}>
+                This can take a while for higher-end GPT-5 models.
+              </div>
+            </div>
+          )}
+
+          {result && result.runs.length > 0 && (
+            <div className="benchmark-results">
+              {result.runs.map(run => (
+                <div key={`${run.requested_model}-${run.reasoning_effort}-${run.verbosity}`} className="benchmark-run-card">
+                  <div className="benchmark-run-header">
+                    <div>
+                      <div className="benchmark-run-title">{run.requested_model}</div>
+                      <div className="benchmark-run-subtitle">
+                        Resolved as {run.resolved_model}
+                        {run.reasoning_effort ? ` - reasoning ${run.reasoning_effort}` : ''}
+                        {run.verbosity ? ` - verbosity ${run.verbosity}` : ''}
+                      </div>
+                    </div>
+                    <span className={`debug-result-badge ${run.error ? 'no-match' : 'book'}`}>
+                      {run.error ? 'error' : `${Math.round(run.evaluation.overall_score * 100)} score`}
+                    </span>
+                  </div>
+
+                  {run.error ? (
+                    <div className="debug-error">{run.error}</div>
+                  ) : (
+                    <>
+                      <div className="benchmark-metrics-grid">
+                        <div className="graph-info-card">
+                          <div className="graph-info-label">Latency</div>
+                          <div className="graph-info-value">{formatDuration(run.elapsed_ms)}</div>
+                        </div>
+                        <div className="graph-info-card">
+                          <div className="graph-info-label">Estimated Cost</div>
+                          <div className="graph-info-value">
+                            {formatUsd(run.cost.estimated_total_cost_usd)}
+                          </div>
+                        </div>
+                        <div className="graph-info-card">
+                          <div className="graph-info-label">Title Matches</div>
+                          <div className="graph-info-value">
+                            {run.evaluation.matched_count}/{run.evaluation.expected_count}
+                          </div>
+                        </div>
+                        <div className="graph-info-card">
+                          <div className="graph-info-label">Visual Identified</div>
+                          <div className="graph-info-value">
+                            {run.evaluation.identified_count}/{run.evaluation.expected_count}
+                          </div>
+                        </div>
+                        <div className="graph-info-card">
+                          <div className="graph-info-label">Output Tokens</div>
+                          <div className="graph-info-value">{run.usage.output_tokens}</div>
+                        </div>
+                        <div className="graph-info-card">
+                          <div className="graph-info-label">Reasoning Tokens</div>
+                          <div className="graph-info-value">{run.usage.reasoning_tokens}</div>
+                        </div>
+                      </div>
+
+                      <table className="benchmark-book-table">
+                        <thead>
+                          <tr>
+                            <th>Expected</th>
+                            <th>Visual</th>
+                            <th>Match</th>
+                            <th>Author</th>
+                            <th>Prediction</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {run.evaluation.per_book.map(book => (
+                            <tr key={book.label}>
+                              <td>{book.label}</td>
+                              <td className={book.visual_ok ? 'benchmark-pass' : 'benchmark-fail'}>
+                                {book.visual_ok ? 'Yes' : 'No'}
+                              </td>
+                              <td className={book.match_ok ? 'benchmark-pass' : 'benchmark-fail'}>
+                                {book.match_ok ? 'Yes' : 'No'}
+                              </td>
+                              <td className={book.author_ok ? 'benchmark-pass' : 'benchmark-fail'}>
+                                {book.author_ok ? 'Yes' : 'No'}
+                              </td>
+                              <td>
+                                {book.prediction ? (
+                                  <div className="benchmark-prediction">
+                                    <div>{book.prediction.extracted_title || '(no extracted title)'}</div>
+                                    {book.prediction.matched_title && (
+                                      <div className="benchmark-prediction-secondary">
+                                        matched: {book.prediction.matched_title}
+                                      </div>
+                                    )}
+                                  </div>
+                                ) : (
+                                  <span className="benchmark-prediction-secondary">(missing)</span>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+
+                      {(run.evaluation.missed_labels.length > 0 || run.evaluation.unexpected_predictions.length > 0) && (
+                        <div className="benchmark-notes">
+                          {run.evaluation.missed_labels.length > 0 && (
+                            <div>
+                              <strong>Missed:</strong> {run.evaluation.missed_labels.join(', ')}
+                            </div>
+                          )}
+                          {run.evaluation.unexpected_predictions.length > 0 && (
+                            <div>
+                              <strong>Unexpected:</strong>{' '}
+                              {run.evaluation.unexpected_predictions.map((item, index) => (
+                                <span key={index}>
+                                  {index > 0 ? ', ' : ''}
+                                  {item.extracted_title || item.matched_title || '(unknown)'}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+                        </div>
+                      )}
+
+                      <details className="benchmark-details">
+                        <summary>Parsed books</summary>
+                        <pre className="tools-result-json benchmark-json">
+                          {JSON.stringify(run.books, null, 2)}
+                        </pre>
+                      </details>
+
+                      <details className="benchmark-details">
+                        <summary>Raw model response</summary>
+                        <pre className="tools-result-json benchmark-json">
+                          {run.raw_response || '(empty)'}
+                        </pre>
+                      </details>
+                    </>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Tab: Agent Graph
 // ---------------------------------------------------------------------------
 
@@ -961,6 +1464,7 @@ function AgentGraphTab() {
 const TABS: { id: TabId; label: string }[] = [
   { id: 'pipeline', label: 'Pipeline Debug' },
   { id: 'tools', label: 'Search Tools' },
+  { id: 'benchmark', label: 'Benchmark' },
   { id: 'graph', label: 'Agent Graph' },
 ];
 
@@ -983,6 +1487,7 @@ export default function DebugDashboard() {
 
       {activeTab === 'pipeline' && <PipelineDebugTab />}
       {activeTab === 'tools' && <SearchToolsTab />}
+      {activeTab === 'benchmark' && <BenchmarkTab />}
       {activeTab === 'graph' && <AgentGraphTab />}
     </div>
   );
