@@ -154,6 +154,13 @@ async def analyze_photo(file: UploadFile = File(...)) -> PhotoResponse:
         logger.exception("Vision agent error")
         return PhotoResponse(error=f"Vision agent error: {e}")
 
+    if len(results) == 1 and results[0].get("error"):
+        raw_response = str(results[0].get("raw_response") or "").strip()
+        error_text = raw_response or str(results[0]["error"])
+        if len(error_text) > 300:
+            error_text = f"{error_text[:297].rstrip()}..."
+        return PhotoResponse(error=f"Vision agent response error: {error_text}")
+
     books = []
     for r in results:
         books.append(

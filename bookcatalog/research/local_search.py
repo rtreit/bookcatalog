@@ -7,6 +7,7 @@ using scripts/build_openlibrary_db.py.
 
 import logging
 import sqlite3
+import threading
 import time
 from difflib import SequenceMatcher
 from pathlib import Path
@@ -296,6 +297,7 @@ class LocalBookSearch:
             str(self.db_path), check_same_thread=False
         )
         self._conn.row_factory = sqlite3.Row
+        self._lock = threading.RLock()
 
     def search(self, query: str, limit: int = 10) -> list[dict]:
         """Search for books matching a free-text query.
@@ -320,54 +322,56 @@ class LocalBookSearch:
             return []
 
         fetch_limit = max(limit, 25)
-        for fts_query in fts_queries:
-            try:
-                rows = self._conn.execute(
-                    """
-                    SELECT w.key, w.title, w.authors, w.first_publish_year,
-                           w.cover_id, w.subjects, w.description, w.subtitle,
-                           w.subject_people, w.subject_places, w.subject_times,
-                           w.lc_classifications, w.dewey_number, w.first_sentence,
-                           rank
-                    FROM books_fts
-                    JOIN works w ON books_fts.rowid = w.rowid
-                    WHERE books_fts MATCH ?
-                    ORDER BY rank
-                    LIMIT ?
-                    """,
-                    (fts_query, fetch_limit),
-                ).fetchall()
-            except Exception:
-                continue
+        with self._lock:
+            for fts_query in fts_queries:
+                try:
+                    rows = self._conn.execute(
+                        """
+                        SELECT w.key, w.title, w.authors, w.first_publish_year,
+                               w.cover_id, w.subjects, w.description, w.subtitle,
+                               w.subject_people, w.subject_places, w.subject_times,
+                               w.lc_classifications, w.dewey_number, w.first_sentence,
+                               rank
+                        FROM books_fts
+                        JOIN works w ON books_fts.rowid = w.rowid
+                        WHERE books_fts MATCH ?
+                        ORDER BY rank
+                        LIMIT ?
+                        """,
+                        (fts_query, fetch_limit),
+                    ).fetchall()
+                except Exception:
+                    continue
 
-            if rows:
-                ranked_rows = [dict(r) for r in rows]
-                ranked_rows.sort(
-                    key=lambda row: (
-                        self._score_result(query, row),
-                        -(float(row.get("rank") or 0.0)),
-                    ),
-                    reverse=True,
-                )
-                return ranked_rows[:limit]
+                if rows:
+                    ranked_rows = [dict(r) for r in rows]
+                    ranked_rows.sort(
+                        key=lambda row: (
+                            self._score_result(query, row),
+                            -(float(row.get("rank") or 0.0)),
+                        ),
+                        reverse=True,
+                    )
+                    return ranked_rows[:limit]
 
         return []
 
     def get_stats(self) -> dict[str, int]:
         """Return basic counts for the local Open Library database."""
-        works_count = self._conn.execute(
-            "SELECT COUNT(*) FROM works"
-        ).fetchone()[0]
-        authors_count = self._conn.execute(
-            "SELECT COUNT(*) FROM authors"
-        ).fetchone()[0]
-        editions_count = 0
-        try:
-            editions_count = self._conn.execute(
-                "SELECT COUNT(*) FROM editions"
+        with self._lock:
+            works_count = self._conn.execute(
+                "SELECT COUNT(*) FROM works"
             ).fetchone()[0]
-        except sqlite3.OperationalError:
-            pass
+            authors_count = self._conn.execute(
+                "SELECT COUNT(*) FROM authors"
+            ).fetchone()[0]
+            editions_count = 0
+            try:
+                editions_count = self._conn.execute(
+                    "SELECT COUNT(*) FROM editions"
+                ).fetchone()[0]
+            except sqlite3.OperationalError:
+                pass
         return {
             "works": int(works_count),
             "authors": int(authors_count),
@@ -569,21 +573,22 @@ class LocalBookSearch:
             for fts_q in fts_queries:
                 tq = time.perf_counter()
                 try:
-                    rows = self._conn.execute(
-                        """
-                        SELECT w.key, w.title, w.authors, w.first_publish_year,
-                               w.cover_id, w.subjects, w.description, w.subtitle,
-                               w.subject_people, w.subject_places, w.subject_times,
-                               w.lc_classifications, w.dewey_number, w.first_sentence,
-                               rank
-                        FROM books_fts
-                        JOIN works w ON books_fts.rowid = w.rowid
-                        WHERE books_fts MATCH ?
-                        ORDER BY rank
-                        LIMIT ?
-                        """,
-                        (fts_q, fetch_limit),
-                    ).fetchall()
+                    with self._lock:
+                        rows = self._conn.execute(
+                            """
+                            SELECT w.key, w.title, w.authors, w.first_publish_year,
+                                   w.cover_id, w.subjects, w.description, w.subtitle,
+                                   w.subject_people, w.subject_places, w.subject_times,
+                                   w.lc_classifications, w.dewey_number, w.first_sentence,
+                                   rank
+                            FROM books_fts
+                            JOIN works w ON books_fts.rowid = w.rowid
+                            WHERE books_fts MATCH ?
+                            ORDER BY rank
+                            LIMIT ?
+                            """,
+                            (fts_q, fetch_limit),
+                        ).fetchall()
                     new_rows = []
                     for r in rows:
                         key = r["key"]
@@ -771,13 +776,14 @@ class LocalBookSearch:
             return
 
         try:
-            rows = self._conn.execute(
-                "SELECT isbn_13, isbn_10, publishers, number_of_pages, "
-                "publish_date, physical_format "
-                "FROM editions WHERE work_key = ? "
-                "LIMIT 50",
-                (work_key,),
-            ).fetchall()
+            with self._lock:
+                rows = self._conn.execute(
+                    "SELECT isbn_13, isbn_10, publishers, number_of_pages, "
+                    "publish_date, physical_format "
+                    "FROM editions WHERE work_key = ? "
+                    "LIMIT 50",
+                    (work_key,),
+                ).fetchall()
         except sqlite3.OperationalError:
             # editions table may not exist yet
             return
@@ -976,7 +982,8 @@ class LocalBookSearch:
 
     def close(self) -> None:
         """Close the database connection."""
-        self._conn.close()
+        with self._lock:
+            self._conn.close()
 
     def __enter__(self) -> "LocalBookSearch":
         return self

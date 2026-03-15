@@ -225,6 +225,31 @@ class TestAnalyzePhotoEndpoint:
         assert data["total_identified"] == 1
         assert data["total_matched"] == 0
 
+    @patch("bookcatalog.agents.vision.run_vision_agent", new_callable=AsyncMock)
+    def test_analyze_non_json_model_response_surfaces_error(
+        self, mock_vision: AsyncMock
+    ) -> None:
+        """Photo endpoint exposes parse failures as a top-level error."""
+        mock_vision.return_value = [
+            {
+                "extracted_title": None,
+                "error": "Failed to parse vision agent response",
+                "raw_response": "Image is too dark to read any books.",
+            },
+        ]
+
+        response = client.post(
+            "/api/agents/analyze-photo",
+            files={"file": ("dark.jpg", b"\xff\xd8\xff\xe0test", "image/jpeg")},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["books"] == []
+        assert data["total_identified"] == 0
+        assert data["total_matched"] == 0
+        assert "too dark" in data["error"]
+
 
 class TestSampleMCPServer:
     """Tests for the sample MCP server tools."""

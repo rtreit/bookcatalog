@@ -9,7 +9,7 @@ load_dotenv()
 
 OPENAI_API_KEY: str = os.environ.get("OPENAI_API_KEY", "")
 PREPROCESSOR_MODEL: str = os.environ.get("PREPROCESSOR_MODEL", "gpt-5-nano")
-VISION_MODEL: str = os.environ.get("VISION_MODEL", "gpt-4o")
+VISION_MODEL: str = os.environ.get("VISION_MODEL", "gpt-4.1")
 
 # Path to the MCP server script (agents/ -> bookcatalog/ -> mcp/)
 MCP_BOOK_SEARCH_PATH: str = str(
