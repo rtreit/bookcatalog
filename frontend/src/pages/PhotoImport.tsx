@@ -1,4 +1,6 @@
 import { useState, useRef } from 'react';
+import ModelPicker from '../components/ModelPicker';
+import { useAgentModelConfig } from '../hooks/useAgentModelConfig';
 import './PhotoImport.css';
 
 interface IdentifiedBook {
@@ -16,6 +18,7 @@ interface PhotoResponse {
   books: IdentifiedBook[];
   total_identified: number;
   total_matched: number;
+  model: string;
   error: string | null;
 }
 
@@ -26,6 +29,14 @@ export default function PhotoImport() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const {
+    defaultModel,
+    selectedModel,
+    setSelectedModel,
+    options: modelOptions,
+    loading: modelsLoading,
+    error: modelError,
+  } = useAgentModelConfig('vision', 'bookcatalog.photoImportModel');
 
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const selected = e.target.files?.[0];
@@ -78,6 +89,9 @@ export default function PhotoImport() {
     try {
       const formData = new FormData();
       formData.append('file', file);
+      if (selectedModel) {
+        formData.append('model', selectedModel);
+      }
 
       const res = await fetch('/api/agents/analyze-photo', {
         method: 'POST',
@@ -124,6 +138,18 @@ export default function PhotoImport() {
 
   return (
     <div className="photo">
+      <ModelPicker
+        title="Photo model"
+        helperText="Choose which model powers Photo Import. The default comes from VISION_MODEL."
+        selectedModel={selectedModel}
+        defaultModel={defaultModel}
+        options={modelOptions}
+        loading={modelsLoading}
+        error={modelError}
+        disabled={loading}
+        onChange={setSelectedModel}
+      />
+
       <div className="photo-upload-section">
         <div
           className={`photo-dropzone ${preview ? 'has-image' : ''}`}
@@ -198,6 +224,10 @@ export default function PhotoImport() {
             <div className="stat-card">
               <div className="stat-label">Matched</div>
               <div className="stat-value green">{results.total_matched}</div>
+            </div>
+            <div className="stat-card">
+              <div className="stat-label">Model</div>
+              <div className="stat-value photo-stat-model">{results.model}</div>
             </div>
           </div>
 

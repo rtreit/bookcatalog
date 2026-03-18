@@ -1,4 +1,6 @@
 import { useState, useRef, useEffect } from 'react';
+import ModelPicker from '../components/ModelPicker';
+import { useAgentModelConfig } from '../hooks/useAgentModelConfig';
 import './AgentChat.css';
 
 interface ClassifiedItem {
@@ -35,6 +37,14 @@ export default function AgentChat() {
   const [loadingLabel, setLoadingLabel] = useState('Thinking...');
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const {
+    defaultModel,
+    selectedModel,
+    setSelectedModel,
+    options: modelOptions,
+    loading: modelsLoading,
+    error: modelError,
+  } = useAgentModelConfig('chat', 'bookcatalog.agentChatModel');
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -57,6 +67,7 @@ export default function AgentChat() {
       const body = {
         message: text,
         messages: nextMessages.map(({ role, content }) => ({ role, content })),
+        model: selectedModel || undefined,
       };
 
       const res = await fetch('/api/agents/chat', {
@@ -144,6 +155,18 @@ Samsung T7 Shield Portable SSD 2TB`
 
   return (
     <div className="chat">
+      <ModelPicker
+        title="Chat model"
+        helperText="Choose which model powers Agent Chat. The default comes from PREPROCESSOR_MODEL."
+        selectedModel={selectedModel}
+        defaultModel={defaultModel}
+        options={modelOptions}
+        loading={modelsLoading}
+        error={modelError}
+        disabled={loading}
+        onChange={setSelectedModel}
+      />
+
       <div className="chat-messages">
         {messages.length === 0 && (
           <div className="chat-empty">

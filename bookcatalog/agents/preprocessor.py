@@ -74,6 +74,7 @@ async def run_preprocessor(
     items: list[str] | None = None,
     messages: list[dict[str, str]] | None = None,
     tools: list[Any] | None = None,
+    model_name: str | None = None,
 ) -> AssistantResponse:
     """Run the conversational book assistant.
 
@@ -81,6 +82,7 @@ async def run_preprocessor(
         items: Optional legacy list of raw item strings to classify.
         messages: Optional chat history as a list of role/content dicts.
         tools: Optional pre-loaded tools, mainly for testing.
+        model_name: Optional model override.
 
     Returns:
         A response containing the assistant's prose reply and any parsed
@@ -89,7 +91,7 @@ async def run_preprocessor(
     normalized_messages = _normalize_messages(items=items, messages=messages)
 
     model = ChatOpenAI(
-        model=PREPROCESSOR_MODEL,
+        model=model_name or PREPROCESSOR_MODEL,
         api_key=OPENAI_API_KEY,
         temperature=0,
     )

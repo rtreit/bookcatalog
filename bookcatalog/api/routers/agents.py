@@ -3,7 +3,7 @@
 import logging
 from typing import Any
 
-from fastapi import APIRouter, File, UploadFile
+from fastapi import APIRouter, File, Form, UploadFile
 from pydantic import BaseModel, Field, model_validator
 
 router = APIRouter()
@@ -29,6 +29,11 @@ class ChatRequest(BaseModel):
         default_factory=list,
         description="Full conversation history as role/content objects.",
     )
+    model: str | None = Field(
+        default=None,
+        max_length=100,
+        description="Optional model override for the chat agent.",
+    )
 
     @model_validator(mode="after")
     def validate_message_content(self) -> "ChatRequest":
@@ -38,6 +43,10 @@ class ChatRequest(BaseModel):
 
         if not self.messages and self.message is None:
             raise ValueError("Either message or messages must be provided")
+
+        if self.model is not None:
+            cleaned_model = self.model.strip()
+            self.model = cleaned_model or None
 
         return self
 
@@ -76,6 +85,7 @@ class PhotoResponse(BaseModel):
     books: list[IdentifiedBook] = Field(default_factory=list)
     total_identified: int = 0
     total_matched: int = 0
+    model: str = ""
     error: str | None = None
 
 
@@ -100,22 +110,33 @@ async def agent_chat(request: ChatRequest) -> ChatResponse:
     from bookcatalog.agents.preprocessor import run_preprocessor
     from bookcatalog.agents.config import PREPROCESSOR_MODEL
 
+    selected_model = request.model or PREPROCESSOR_MODEL
+
     try:
         if request.messages:
-            response = await run_preprocessor(messages=request.messages)
+            response = await run_preprocessor(
+                messages=request.messages,
+                model_name=selected_model,
+            )
         elif request.items:
-            response = await run_preprocessor(items=request.items)
+            response = await run_preprocessor(
+                items=request.items,
+                model_name=selected_model,
+            )
         else:
-            response = await run_preprocessor(messages=[
-                {"role": "user", "content": request.message or ""},
-            ])
+            response = await run_preprocessor(
+                messages=[
+                    {"role": "user", "content": request.message or ""},
+                ],
+                model_name=selected_model,
+            )
     except Exception as e:
         logger.exception("Preprocessor agent error")
         return ChatResponse(
             error=f"Agent error: {e}",
             message="",
             raw_response="",
-            model=PREPROCESSOR_MODEL,
+            model=selected_model,
         )
 
     classified = []
@@ -137,22 +158,29 @@ async def agent_chat(request: ChatRequest) -> ChatResponse:
         results=classified,
         message=response.get("raw_response", ""),
         raw_response=response.get("raw_response", ""),
-        model=PREPROCESSOR_MODEL,
+        model=selected_model,
     )
 
 
 @router.post("/analyze-photo", response_model=PhotoResponse)
-async def analyze_photo(file: UploadFile = File(...)) -> PhotoResponse:
+async def analyze_photo(
+    file: UploadFile = File(...),
+    model: str | None = Form(default=None),
+) -> PhotoResponse:
     """Analyze a photo of books using the vision agent.
 
     Accepts JPEG, PNG, GIF, or WebP images up to 20 MB.
     """
+    from bookcatalog.agents.config import VISION_MODEL
     from bookcatalog.agents.vision import run_vision_agent
+
+    selected_model = (model or "").strip() or VISION_MODEL
 
     if file.content_type not in ALLOWED_IMAGE_TYPES:
         return PhotoResponse(
             error=f"Unsupported image type: {file.content_type}. "
             f"Allowed: {', '.join(sorted(ALLOWED_IMAGE_TYPES))}",
+            model=selected_model,
         )
 
     image_data = await file.read()
@@ -160,22 +188,28 @@ async def analyze_photo(file: UploadFile = File(...)) -> PhotoResponse:
         return PhotoResponse(
             error=f"Image too large ({len(image_data)} bytes). "
             f"Maximum size: {MAX_IMAGE_SIZE} bytes.",
+            model=selected_model,
         )
 
     try:
         results = await run_vision_agent(
-            image_data, media_type=file.content_type or "image/jpeg"
+            image_data,
+            media_type=file.content_type or "image/jpeg",
+            model_name=selected_model,
         )
     except Exception as e:
         logger.exception("Vision agent error")
-        return PhotoResponse(error=f"Vision agent error: {e}")
+        return PhotoResponse(error=f"Vision agent error: {e}", model=selected_model)
 
     if len(results) == 1 and results[0].get("error"):
         raw_response = str(results[0].get("raw_response") or "").strip()
         error_text = raw_response or str(results[0]["error"])
         if len(error_text) > 300:
             error_text = f"{error_text[:297].rstrip()}..."
-        return PhotoResponse(error=f"Vision agent response error: {error_text}")
+        return PhotoResponse(
+            error=f"Vision agent response error: {error_text}",
+            model=selected_model,
+        )
 
     books = []
     for r in results:
@@ -197,7 +231,16 @@ async def analyze_photo(file: UploadFile = File(...)) -> PhotoResponse:
         books=books,
         total_identified=len(books),
         total_matched=matched_count,
+        model=selected_model,
     )
+
+
+@router.get("/model-options")
+async def model_options() -> dict[str, Any]:
+    """Return shared model picker metadata for the frontend."""
+    from bookcatalog.agents.model_options import get_model_picker_options
+
+    return get_model_picker_options()
 
 
 @router.get("/benchmark-cases")

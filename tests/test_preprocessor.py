@@ -184,6 +184,44 @@ class TestPreprocessorAgent:
         assert captured["messages"] == [{"role": "user", "content": "Dune"}]
 
     @pytest.mark.asyncio
+    async def test_run_preprocessor_accepts_model_override(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        """A request can override the configured chat model."""
+        captured: dict[str, Any] = {}
+
+        class FakeModel:
+            pass
+
+        def fake_chat_openai(**kwargs: Any) -> FakeModel:
+            captured["kwargs"] = kwargs
+            return FakeModel()
+
+        async def fake_invoke_agent(
+            model: Any,
+            tools: list[Any],
+            messages: list[dict[str, str]],
+        ) -> dict[str, Any]:
+            captured["model"] = model
+            return {
+                "raw_response": "Done.",
+                "results": [],
+            }
+
+        monkeypatch.setattr(preprocessor, "ChatOpenAI", fake_chat_openai)
+        monkeypatch.setattr(preprocessor, "_invoke_agent", fake_invoke_agent)
+
+        response = await run_preprocessor(
+            messages=[{"role": "user", "content": "Dune"}],
+            tools=[],
+            model_name="gpt-5-mini",
+        )
+
+        assert response["raw_response"] == "Done."
+        assert captured["kwargs"]["model"] == "gpt-5-mini"
+
+    @pytest.mark.asyncio
     async def test_invoke_agent_extracts_prose_and_json(self, monkeypatch: pytest.MonkeyPatch) -> None:
         """Structured JSON is parsed while prose is preserved for chat display."""
 

@@ -65,7 +65,8 @@ class TestChatEndpoint:
         assert data["results"][1]["decision"] == "not_a_book"
         assert data["error"] is None
         mock_preprocessor.assert_awaited_once_with(
-            items=["Dune by Frank Herbert", "USB-C Cable"]
+            items=["Dune by Frank Herbert", "USB-C Cable"],
+            model_name="gpt-5-nano",
         )
 
     @patch("bookcatalog.agents.preprocessor.run_preprocessor", new_callable=AsyncMock)
@@ -86,7 +87,7 @@ class TestChatEndpoint:
         assert data["results"] == []
         mock_preprocessor.assert_awaited_once_with(messages=[
             {"role": "user", "content": "Is The Great Gatsby a book?"},
-        ])
+        ], model_name="gpt-5-nano")
 
     @patch("bookcatalog.agents.preprocessor.run_preprocessor", new_callable=AsyncMock)
     def test_chat_with_message_history(self, mock_preprocessor: AsyncMock) -> None:
@@ -111,7 +112,28 @@ class TestChatEndpoint:
             {"role": "user", "content": "Tell me about Dune."},
             {"role": "assistant", "content": "Dune is a science fiction novel by Frank Herbert."},
             {"role": "user", "content": "Tell me more about that author."},
-        ])
+        ], model_name="gpt-5-nano")
+
+    @patch("bookcatalog.agents.preprocessor.run_preprocessor", new_callable=AsyncMock)
+    def test_chat_with_model_override(self, mock_preprocessor: AsyncMock) -> None:
+        """Chat endpoint forwards an explicit model override."""
+        mock_preprocessor.return_value = {
+            "raw_response": "Using a different model.",
+            "results": [],
+        }
+
+        response = client.post("/api/agents/chat", json={
+            "message": "Tell me about Dune.",
+            "model": "gpt-5-mini",
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model"] == "gpt-5-mini"
+        mock_preprocessor.assert_awaited_once_with(
+            messages=[{"role": "user", "content": "Tell me about Dune."}],
+            model_name="gpt-5-mini",
+        )
 
     @patch("bookcatalog.agents.preprocessor.run_preprocessor", new_callable=AsyncMock)
     def test_chat_agent_error(self, mock_preprocessor: AsyncMock) -> None:
@@ -170,7 +192,44 @@ class TestAnalyzePhotoEndpoint:
         data = response.json()
         assert data["total_identified"] == 1
         assert data["total_matched"] == 1
+        assert data["model"] == "gpt-4.1"
         assert data["books"][0]["matched_title"] == "Dune"
+        mock_vision.assert_awaited_once_with(
+            b"\xff\xd8\xff\xe0test",
+            media_type="image/jpeg",
+            model_name="gpt-4.1",
+        )
+
+    @patch("bookcatalog.agents.vision.run_vision_agent", new_callable=AsyncMock)
+    def test_analyze_valid_image_with_model_override(self, mock_vision: AsyncMock) -> None:
+        """Photo endpoint forwards an explicit model override."""
+        mock_vision.return_value = [
+            {
+                "extracted_title": "Dune",
+                "extracted_author": "Frank Herbert",
+                "matched_title": "Dune",
+                "matched_authors": ["Frank Herbert"],
+                "year": 1965,
+                "confidence": 0.95,
+                "match_confidence": 0.98,
+                "notes": "Spine text visible",
+            },
+        ]
+
+        response = client.post(
+            "/api/agents/analyze-photo",
+            files={"file": ("books.jpg", b"\xff\xd8\xff\xe0test", "image/jpeg")},
+            data={"model": "gpt-5"},
+        )
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model"] == "gpt-5"
+        mock_vision.assert_awaited_once_with(
+            b"\xff\xd8\xff\xe0test",
+            media_type="image/jpeg",
+            model_name="gpt-5",
+        )
 
     def test_analyze_unsupported_type(self) -> None:
         """Photo endpoint rejects unsupported file types."""
@@ -311,6 +370,31 @@ class TestBenchmarkEndpoints:
                 }
             ],
         )
+
+
+class TestModelOptionsEndpoint:
+    """Tests for the shared model picker metadata endpoint."""
+
+    @patch("bookcatalog.agents.model_options.get_model_picker_options")
+    def test_model_options(self, mock_model_options) -> None:
+        """Model options endpoint returns chat and vision picker config."""
+        mock_model_options.return_value = {
+            "chat": {
+                "default_model": "gpt-5-nano",
+                "options": [{"value": "gpt-5-nano", "label": "GPT-5 nano"}],
+            },
+            "vision": {
+                "default_model": "gpt-4.1",
+                "options": [{"value": "gpt-4.1", "label": "GPT-4.1"}],
+            },
+        }
+
+        response = client.get("/api/agents/model-options")
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["chat"]["default_model"] == "gpt-5-nano"
+        assert data["vision"]["default_model"] == "gpt-4.1"
 
 
 class TestSampleMCPServer:
