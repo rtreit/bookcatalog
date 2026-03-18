@@ -1,9 +1,11 @@
 import { useState } from 'react';
+import BookEntryLink from '../components/BookEntryLink';
 import './BookMatcher.css';
 
 interface MatchedBook {
   input_title: string;
   matched: boolean;
+  work_key: string | null;
   matched_title: string | null;
   decision: string | null;
   confidence: number | null;
@@ -282,7 +284,17 @@ export default function BookMatcher() {
                     <div className="result-input-title">{r.input_title}</div>
                     {r.matched ? (
                       <>
-                        <div className="result-matched-title">{r.matched_title}</div>
+                        <div className="result-matched-title">
+                          <BookEntryLink
+                            entryRef={{
+                              workKey: r.work_key,
+                              title: r.matched_title,
+                              authors: r.authors,
+                            }}
+                          >
+                            {r.matched_title}
+                          </BookEntryLink>
+                        </div>
                         <div className="result-meta">
                           {r.authors.length > 0 && <span>{r.authors.join(', ')}</span>}
                           {r.first_publish_year && <span>{r.first_publish_year}</span>}

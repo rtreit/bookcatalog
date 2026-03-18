@@ -55,6 +55,7 @@ class ClassifiedItem(BaseModel):
     input: str
     is_book: bool | None = None
     title: str | None = None
+    work_key: str | None = None
     authors: list[str] = Field(default_factory=list)
     year: int | None = None
     confidence: float = 0.0
@@ -74,6 +75,7 @@ class IdentifiedBook(BaseModel):
     extracted_title: str | None = None
     extracted_author: str | None = None
     matched_title: str | None = None
+    work_key: str | None = None
     matched_authors: list[str] = Field(default_factory=list)
     year: int | None = None
     confidence: float = 0.0
@@ -150,6 +152,7 @@ async def agent_chat(request: ChatRequest) -> ChatResponse:
                 input=normalized["input"],
                 is_book=normalized["is_book"],
                 title=normalized["title"],
+                work_key=normalized.get("work_key"),
                 authors=normalized["authors"],
                 year=normalized["year"],
                 confidence=normalized["confidence"],
@@ -222,6 +225,7 @@ async def analyze_photo(
                 extracted_title=r.get("extracted_title"),
                 extracted_author=r.get("extracted_author"),
                 matched_title=r.get("matched_title"),
+                work_key=r.get("work_key"),
                 matched_authors=r.get("matched_authors", []),
                 year=r.get("year"),
                 confidence=r.get("confidence", 0.0),

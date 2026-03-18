@@ -99,6 +99,7 @@ class TestParseResponse:
                 "input": "Irish Fairy Tales and Folklore",
                 "is_book": True,
                 "title": "Irish Fairy Tales and Folklore",
+                "work_key": None,
                 "authors": ["W. B. Yeats"],
                 "year": 1888,
                 "confidence": 0.9,
@@ -264,7 +265,7 @@ class TestPreprocessorAgent:
             "messages": [
                 FakeMessage(
                     "I found one book and one non-book.\n\n```json\n"
-                    '[{"input":"Dune","is_book":true,"title":"Dune","authors":["Frank Herbert"],'
+                    '[{"input":"Dune","is_book":true,"title":"Dune","work_key":"/works/OL123W","authors":["Frank Herbert"],'
                     '"year":1965,"confidence":0.98,"decision":"book","reason":"Matched"},'
                     '{"input":"USB-C Cable","is_book":false,"title":null,"authors":[],'
                     '"year":null,"confidence":0.99,"decision":"not_a_book","reason":"Accessory"}]'
@@ -284,6 +285,7 @@ class TestPreprocessorAgent:
         assert response["raw_response"] == "I found one book and one non-book."
         assert len(response["results"]) == 2
         assert response["results"][0]["title"] == "Dune"
+        assert response["results"][0]["work_key"] == "/works/OL123W"
         assert response["results"][1]["decision"] == "not_a_book"
 
     @pytest.mark.asyncio

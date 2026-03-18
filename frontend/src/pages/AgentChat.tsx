@@ -1,4 +1,5 @@
 import { useState, useRef, useEffect } from 'react';
+import BookEntryLink from '../components/BookEntryLink';
 import ModelPicker from '../components/ModelPicker';
 import { useAgentModelConfig } from '../hooks/useAgentModelConfig';
 import './AgentChat.css';
@@ -7,6 +8,7 @@ interface ClassifiedItem {
   input: string;
   is_book: boolean | null;
   title: string | null;
+  work_key?: string | null;
   authors: string[];
   year: number | null;
   confidence: number;
@@ -210,10 +212,20 @@ Samsung T7 Shield Portable SSD 2TB`
                     <div className={`chat-result-indicator ${getDecisionClass(r.decision)}`} />
                     <div className="chat-result-body">
                       <div className="chat-result-input">{r.input}</div>
-                      {r.is_book ? (
-                        <>
-                          <div className="chat-result-title">{r.title}</div>
-                          <div className="chat-result-meta">
+                        {r.is_book ? (
+                          <>
+                            <div className="chat-result-title">
+                              <BookEntryLink
+                                entryRef={{
+                                  workKey: r.work_key,
+                                  title: r.title,
+                                  authors: r.authors,
+                                }}
+                              >
+                                {r.title}
+                              </BookEntryLink>
+                            </div>
+                            <div className="chat-result-meta">
                             {r.authors.length > 0 && <span>{r.authors.join(', ')}</span>}
                             {r.year && <span>{r.year}</span>}
                           </div>

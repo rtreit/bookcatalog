@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import mermaid from 'mermaid';
+import BookEntryLink from '../components/BookEntryLink';
 import './DebugDashboard.css';
 
 // ---------------------------------------------------------------------------
@@ -57,6 +58,7 @@ interface DebugStages {
   };
   result: {
     matched: boolean;
+    work_key?: string | null;
     decision: string | null;
     confidence?: number;
     matched_title?: string;
@@ -143,6 +145,7 @@ interface BenchmarkPrediction {
   extracted_title?: string | null;
   extracted_author?: string | null;
   matched_title?: string | null;
+  work_key?: string | null;
   matched_authors?: string[];
   notes?: string;
 }
@@ -168,6 +171,7 @@ interface BenchmarkEvaluation {
   unexpected_predictions: Array<{
     extracted_title?: string | null;
     matched_title?: string | null;
+    work_key?: string | null;
     notes?: string;
   }>;
 }
@@ -239,6 +243,35 @@ function StagePanel({
   );
 }
 
+function InlineBookLink({
+  title,
+  workKey,
+  authors,
+  className,
+}: {
+  title: string | null | undefined;
+  workKey?: string | null;
+  authors?: string[];
+  className?: string;
+}) {
+  if (!title) {
+    return null;
+  }
+
+  return (
+    <BookEntryLink
+      entryRef={{
+        workKey,
+        title,
+        authors: authors || [],
+      }}
+      className={className}
+    >
+      {title}
+    </BookEntryLink>
+  );
+}
+
 function CandidatePanel({ candidate, rank }: { candidate: Candidate; rank: number }) {
   const [open, setOpen] = useState(false);
   const scoreColor =
@@ -252,7 +285,11 @@ function CandidatePanel({ candidate, rank }: { candidate: Candidate; rank: numbe
         <span className={`debug-expand-icon ${open ? 'open' : ''}`}>&#9654;</span>
         <span className="debug-candidate-rank">#{rank}</span>
         <span className="debug-candidate-title">
-          {candidate.title}
+          <InlineBookLink
+            title={candidate.title}
+            workKey={candidate.work_key}
+            authors={candidate.authors}
+          />
           {candidate.authors.length > 0 && (
             <span style={{ color: 'var(--text-muted)', fontWeight: 400 }}>
               {' '}by {candidate.authors.join(', ')}
@@ -317,7 +354,13 @@ function DebugResultCard({ result }: { result: DebugResult }) {
         <div className="debug-result-title">
           <div className="debug-result-input">{result.input_title}</div>
           {stages.result.matched && stages.result.matched_title && (
-            <div className="debug-result-match">{stages.result.matched_title}</div>
+            <div className="debug-result-match">
+              <InlineBookLink
+                title={stages.result.matched_title}
+                workKey={stages.result.work_key}
+                authors={stages.result.authors}
+              />
+            </div>
           )}
         </div>
         <span className="debug-result-timing">{result.total_elapsed_ms.toFixed(0)}ms</span>
@@ -468,7 +511,13 @@ function DebugResultCard({ result }: { result: DebugResult }) {
               {stages.result.matched_title && (
                 <>
                   <span className="debug-kv-key">Matched Title</span>
-                  <span className="debug-kv-value">{stages.result.matched_title}</span>
+                  <span className="debug-kv-value">
+                    <InlineBookLink
+                      title={stages.result.matched_title}
+                      workKey={stages.result.work_key}
+                      authors={stages.result.authors}
+                    />
+                  </span>
                 </>
               )}
               {stages.result.authors && stages.result.authors.length > 0 && (
@@ -860,6 +909,7 @@ function SearchToolsTab() {
               </span>
             )}
           </div>
+          <ToolBookPreview result={result} />
           <pre className="tools-result-json">
             {JSON.stringify(result, null, 2)}
           </pre>
@@ -891,12 +941,76 @@ function HistoryEntry({ entry }: { entry: { tool: ToolName; params: string; resu
         <span className="debug-stage-timing">{entry.elapsed_ms}ms</span>
       </div>
       {open && (
-        <pre className="tools-result-json tools-history-json">
-          {JSON.stringify(entry.result, null, 2)}
-        </pre>
+        <>
+          <ToolBookPreview result={entry.result} />
+          <pre className="tools-result-json tools-history-json">
+            {JSON.stringify(entry.result, null, 2)}
+          </pre>
+        </>
       )}
     </div>
   );
+}
+
+function toAuthorList(value: unknown): string[] {
+  if (Array.isArray(value)) {
+    return value.filter((item): item is string => typeof item === 'string' && item.trim().length > 0);
+  }
+  if (typeof value === 'string' && value.trim()) {
+    return [value.trim()];
+  }
+  return [];
+}
+
+function ToolBookPreview({ result }: { result: ToolResult }) {
+  if (result.tool === 'search_books' && Array.isArray(result.results) && result.results.length > 0) {
+    return (
+      <div className="tools-book-preview">
+        <div className="tools-book-preview-title">Search results</div>
+        <div className="tools-book-preview-list">
+          {result.results.map((item: ToolResult, index: number) => (
+            <div key={item.key || `${item.title}-${index}`} className="tools-book-preview-card">
+              <InlineBookLink
+                title={item.title}
+                workKey={item.key}
+                authors={toAuthorList(item.authors)}
+              />
+              <div className="tools-book-preview-meta">
+                {toAuthorList(item.authors).length > 0 && (
+                  <span>{toAuthorList(item.authors).join(', ')}</span>
+                )}
+                {item.first_publish_year && <span>{item.first_publish_year}</span>}
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  if (result.tool === 'match_book' && result.matched && result.matched_title) {
+    return (
+      <div className="tools-book-preview">
+        <div className="tools-book-preview-title">Matched work</div>
+        <div className="tools-book-preview-card">
+          <InlineBookLink
+            title={result.matched_title}
+            workKey={result.work_key}
+            authors={toAuthorList(result.authors)}
+          />
+          <div className="tools-book-preview-meta">
+            {toAuthorList(result.authors).length > 0 && (
+              <span>{toAuthorList(result.authors).join(', ')}</span>
+            )}
+            {result.first_publish_year && <span>{result.first_publish_year}</span>}
+            {result.isbn && <span>ISBN: {result.isbn}</span>}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -1233,7 +1347,12 @@ function BenchmarkTab() {
                                     <div>{book.prediction.extracted_title || '(no extracted title)'}</div>
                                     {book.prediction.matched_title && (
                                       <div className="benchmark-prediction-secondary">
-                                        matched: {book.prediction.matched_title}
+                                        matched:{' '}
+                                        <InlineBookLink
+                                          title={book.prediction.matched_title}
+                                          workKey={book.prediction.work_key}
+                                          authors={book.prediction.matched_authors}
+                                        />
                                       </div>
                                     )}
                                   </div>
@@ -1259,7 +1378,14 @@ function BenchmarkTab() {
                               {run.evaluation.unexpected_predictions.map((item, index) => (
                                 <span key={index}>
                                   {index > 0 ? ', ' : ''}
-                                  {item.extracted_title || item.matched_title || '(unknown)'}
+                                  {item.matched_title ? (
+                                    <InlineBookLink
+                                      title={item.matched_title}
+                                      workKey={item.work_key}
+                                    />
+                                  ) : (
+                                    item.extracted_title || '(unknown)'
+                                  )}
                                 </span>
                               ))}
                             </div>

@@ -6,7 +6,7 @@ import time
 from typing import Any
 
 from fastapi import APIRouter
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from bookcatalog.research import (
     LocalBookSearch,
@@ -58,6 +58,7 @@ class MatchRequest(BaseModel):
 class MatchedBook(BaseModel):
     input_title: str
     matched: bool
+    work_key: str | None = None
     matched_title: str | None = None
     decision: str | None = None
     confidence: float | None = None
@@ -78,6 +79,85 @@ class MatchResponse(BaseModel):
     source: str = Field(
         description="Data source used: 'local' or 'api'",
     )
+
+
+class BookEntryRequest(BaseModel):
+    work_key: str | None = Field(
+        default=None,
+        description="Open Library work key, such as /works/OL123W.",
+    )
+    title: str | None = Field(
+        default=None,
+        description="Fallback title to resolve when a work key is not available.",
+    )
+    authors: list[str] = Field(
+        default_factory=list,
+        description="Optional author hints used when resolving by title.",
+    )
+    edition_limit: int = Field(
+        default=12,
+        ge=1,
+        le=50,
+        description="Maximum number of editions to return in the entry payload.",
+    )
+
+    @model_validator(mode="after")
+    def validate_reference(self) -> "BookEntryRequest":
+        """Require either a work key or a title."""
+        if self.work_key is not None:
+            self.work_key = self.work_key.strip() or None
+        if self.title is not None:
+            self.title = self.title.strip() or None
+
+        if not self.work_key and not self.title:
+            raise ValueError("Either work_key or title must be provided")
+        return self
+
+
+class BookEntryLink(BaseModel):
+    title: str
+    url: str
+
+
+class BookEdition(BaseModel):
+    key: str
+    title: str | None = None
+    isbn_10: list[str] = Field(default_factory=list)
+    isbn_13: list[str] = Field(default_factory=list)
+    sample_isbn: str | None = None
+    publishers: list[str] = Field(default_factory=list)
+    publish_date: str | None = None
+    number_of_pages: int | None = None
+    physical_format: str | None = None
+    languages: list[str] = Field(default_factory=list)
+    cover_id: int | None = None
+    cover_image_url: str | None = None
+
+
+class BookEntryResponse(BaseModel):
+    found: bool
+    work_key: str | None = None
+    title: str | None = None
+    subtitle: str | None = None
+    authors: list[str] = Field(default_factory=list)
+    first_publish_year: int | None = None
+    cover_id: int | None = None
+    cover_image_url: str | None = None
+    description: str | None = None
+    first_sentence: str | None = None
+    subjects: list[str] = Field(default_factory=list)
+    subject_places: list[str] = Field(default_factory=list)
+    subject_people: list[str] = Field(default_factory=list)
+    subject_times: list[str] = Field(default_factory=list)
+    lc_classifications: list[str] = Field(default_factory=list)
+    dewey_numbers: list[str] = Field(default_factory=list)
+    links: list[BookEntryLink] = Field(default_factory=list)
+    excerpts: list[str] = Field(default_factory=list)
+    openlibrary_url: str | None = None
+    edition_count: int = 0
+    best_edition: BookEdition | None = None
+    editions: list[BookEdition] = Field(default_factory=list)
+    error: str | None = None
 
 
 @router.post("/match", response_model=MatchResponse)
@@ -127,6 +207,7 @@ async def match_titles(request: MatchRequest) -> MatchResponse:
                 MatchedBook(
                     input_title=title,
                     matched=True,
+                    work_key=(match.raw_doc or {}).get("key"),
                     matched_title=match.matched_title,
                     decision=match.decision,
                     confidence=match.confidence,
@@ -150,6 +231,29 @@ async def match_titles(request: MatchRequest) -> MatchResponse:
         max_concurrent=request.max_concurrent,
         source=source,
     )
+
+
+@router.post("/entry", response_model=BookEntryResponse)
+async def get_book_entry(request: BookEntryRequest) -> BookEntryResponse:
+    """Fetch a reusable local catalog entry view for a work or title."""
+    if _local_search is None:
+        return BookEntryResponse(
+            found=False,
+            error="Local database not available",
+        )
+
+    entry = _local_search.resolve_book_entry(
+        work_key=request.work_key,
+        title=request.title,
+        authors=request.authors,
+        edition_limit=request.edition_limit,
+    )
+    if entry is None:
+        return BookEntryResponse(
+            found=False,
+            error="Book entry not found",
+        )
+    return BookEntryResponse(**entry)
 
 
 class DebugMatchRequest(BaseModel):
@@ -265,6 +369,7 @@ async def tool_match_book(request: MatchToolRequest) -> dict[str, Any]:
         "title": request.title,
         "author": request.author,
         "matched": True,
+        "work_key": (match.raw_doc or {}).get("key"),
         "matched_title": match.matched_title,
         "decision": match.decision,
         "confidence": match.confidence,

@@ -60,12 +60,14 @@ When handling a list classification task:
    - "input"
    - "is_book"
    - "title"
+   - "work_key"
    - "authors"
    - "year"
    - "confidence"
    - "decision"
    - "reason"
 4. Formatting requirements for classification JSON:
+   - "work_key" must be the matched Open Library work key when you have one, otherwise null.
    - "authors" must always be an array of strings, even for one author.
    - "year" must be an integer or null.
    - "confidence" must be a numeric value between 0 and 1.
@@ -412,6 +414,7 @@ def normalize_classified_result(
         "title": _coerce_text(
             raw.get("title") or raw.get("matched_title") or raw.get("extracted_title")
         ),
+        "work_key": _coerce_text(raw.get("work_key")),
         "authors": _coerce_authors(raw.get("authors", raw.get("author"))),
         "year": _coerce_year(raw.get("year", raw.get("first_publish_year"))),
         "confidence": _coerce_confidence(raw.get("confidence")),

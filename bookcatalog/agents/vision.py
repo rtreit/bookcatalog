@@ -48,6 +48,7 @@ book, etc.). Your job is to:
    - "extracted_title": what you read from the image
    - "extracted_author": author if visible (null if not)
    - "matched_title": the matched title from the database (null if no match)
+   - "work_key": the matched Open Library work key (null if no match)
    - "matched_authors": list of matched author names (empty if no match)
    - "year": publication year if found (null otherwise)
    - "confidence": 0.0 to 1.0 confidence in the visual identification
@@ -57,6 +58,7 @@ book, etc.). Your job is to:
 IMPORTANT:
 - Always use the match_book tool for every book you identify.
 - Always pass the author parameter to match_book when you can see or infer the author.
+- When match_book returns a work key, copy that exact work_key into your JSON.
 - If you can only partially read a title, still try to match it.
 - Note any books that are partially obscured or hard to read.
 - Respond with ONLY the JSON array, no other text."""

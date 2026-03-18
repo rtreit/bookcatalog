@@ -6,6 +6,7 @@ using scripts/build_openlibrary_db.py.
 """
 
 import logging
+import json
 import sqlite3
 import threading
 import time
@@ -262,6 +263,70 @@ def _query_is_title_focused(fts_query: str) -> bool:
     return fts_query.startswith("title:")
 
 
+def _split_multi_value_field(value: str | None) -> list[str]:
+    """Split semicolon-delimited Open Library fields into clean values."""
+    if not value:
+        return []
+    return [part.strip() for part in str(value).split(";") if part.strip()]
+
+
+def _parse_json_field(value: str | None) -> Any:
+    """Parse a JSON-serialized field from the local database."""
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None
+
+
+def _normalize_link_entries(value: str | None) -> list[dict[str, str]]:
+    """Normalize serialized Open Library links into title/url pairs."""
+    parsed = _parse_json_field(value)
+    if not isinstance(parsed, list):
+        return []
+
+    links: list[dict[str, str]] = []
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        if not url:
+            continue
+        title = str(item.get("title") or item.get("name") or url).strip()
+        links.append({"title": title or url, "url": url})
+    return links
+
+
+def _normalize_excerpt_entries(value: str | None) -> list[str]:
+    """Normalize serialized Open Library excerpts into plain text strings."""
+    parsed = _parse_json_field(value)
+    if not isinstance(parsed, list):
+        return []
+
+    excerpts: list[str] = []
+    for item in parsed:
+        if isinstance(item, dict):
+            text = (
+                item.get("excerpt")
+                or item.get("text")
+                or item.get("value")
+            )
+        else:
+            text = item
+        cleaned = str(text).strip() if text is not None else ""
+        if cleaned:
+            excerpts.append(cleaned)
+    return excerpts
+
+
+def _cover_image_url(cover_id: int | None) -> str | None:
+    """Return the Open Library cover image URL for a cover ID."""
+    if not cover_id:
+        return None
+    return f"https://covers.openlibrary.org/b/id/{cover_id}-L.jpg"
+
+
 def _title_similarity(a: str, b: str) -> float:
     """Compute normalized similarity between two title strings.
 
@@ -420,6 +485,183 @@ class LocalBookSearch:
             "authors": int(authors_count),
             "editions": int(editions_count),
         }
+
+    def _get_work_row(self, work_key: str) -> sqlite3.Row | None:
+        """Fetch a single work row by key."""
+        with self._lock:
+            row = self._conn.execute(
+                """
+                SELECT key, title, authors, first_publish_year, cover_id,
+                       subjects, description, subtitle, subject_places,
+                       subject_people, subject_times, lc_classifications,
+                       dewey_number, first_sentence, links, excerpts
+                FROM works
+                WHERE key = ?
+                """,
+                (work_key,),
+            ).fetchone()
+        return row
+
+    def _get_edition_rows(
+        self, work_key: str, limit: int = 12
+    ) -> list[sqlite3.Row]:
+        """Fetch edition rows for a work key."""
+        try:
+            with self._lock:
+                return self._conn.execute(
+                    """
+                    SELECT key, title, isbn_10, isbn_13, publishers, publish_date,
+                           number_of_pages, physical_format, languages, cover_id
+                    FROM editions
+                    WHERE work_key = ?
+                    ORDER BY
+                        CASE WHEN publish_date IS NULL OR publish_date = '' THEN 1 ELSE 0 END,
+                        publish_date DESC
+                    LIMIT ?
+                    """,
+                    (work_key, limit),
+                ).fetchall()
+        except sqlite3.OperationalError:
+            return []
+
+    def _get_edition_count(self, work_key: str) -> int:
+        """Return the number of editions associated with a work."""
+        try:
+            with self._lock:
+                row = self._conn.execute(
+                    "SELECT COUNT(*) FROM editions WHERE work_key = ?",
+                    (work_key,),
+                ).fetchone()
+        except sqlite3.OperationalError:
+            return 0
+        return int(row[0]) if row else 0
+
+    def _select_best_edition(
+        self, rows: list[sqlite3.Row]
+    ) -> sqlite3.Row | None:
+        """Choose the most metadata-rich edition for display."""
+        best_row: sqlite3.Row | None = None
+        best_score = -1
+        for row in rows:
+            score = 0
+            if row["isbn_13"]:
+                score += 3
+            if row["isbn_10"]:
+                score += 2
+            if row["number_of_pages"]:
+                score += 1
+            if row["publishers"]:
+                score += 1
+            if row["publish_date"]:
+                score += 1
+            if score > best_score:
+                best_score = score
+                best_row = row
+        return best_row
+
+    def _serialize_edition_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        """Serialize an edition row for the frontend entry viewer."""
+        isbn_10 = _split_multi_value_field(row["isbn_10"])
+        isbn_13 = _split_multi_value_field(row["isbn_13"])
+        publishers = _split_multi_value_field(row["publishers"])
+        languages = _split_multi_value_field(row["languages"])
+        cover_id = row["cover_id"]
+        return {
+            "key": row["key"],
+            "title": row["title"],
+            "isbn_10": isbn_10,
+            "isbn_13": isbn_13,
+            "sample_isbn": (isbn_13 or isbn_10 or [None])[0],
+            "publishers": publishers,
+            "publish_date": row["publish_date"],
+            "number_of_pages": row["number_of_pages"],
+            "physical_format": row["physical_format"],
+            "languages": languages,
+            "cover_id": cover_id,
+            "cover_image_url": _cover_image_url(cover_id),
+        }
+
+    def get_book_entry(
+        self,
+        work_key: str,
+        edition_limit: int = 12,
+    ) -> dict[str, Any] | None:
+        """Return a full local catalog entry for a work key."""
+        row = self._get_work_row(work_key)
+        if row is None:
+            return None
+
+        edition_rows = self._get_edition_rows(work_key, limit=edition_limit)
+        edition_count = self._get_edition_count(work_key)
+        best_edition_row = self._select_best_edition(edition_rows)
+        best_edition = (
+            self._serialize_edition_row(best_edition_row)
+            if best_edition_row is not None
+            else None
+        )
+
+        cover_id = row["cover_id"] or (
+            best_edition_row["cover_id"] if best_edition_row is not None else None
+        )
+
+        return {
+            "found": True,
+            "work_key": row["key"],
+            "title": row["title"],
+            "subtitle": row["subtitle"],
+            "authors": [a.strip() for a in (row["authors"] or "").split(",") if a.strip()],
+            "first_publish_year": row["first_publish_year"],
+            "cover_id": cover_id,
+            "cover_image_url": _cover_image_url(cover_id),
+            "description": row["description"],
+            "first_sentence": row["first_sentence"],
+            "subjects": _split_multi_value_field(row["subjects"]),
+            "subject_places": _split_multi_value_field(row["subject_places"]),
+            "subject_people": _split_multi_value_field(row["subject_people"]),
+            "subject_times": _split_multi_value_field(row["subject_times"]),
+            "lc_classifications": _split_multi_value_field(row["lc_classifications"]),
+            "dewey_numbers": _split_multi_value_field(row["dewey_number"]),
+            "links": _normalize_link_entries(row["links"]),
+            "excerpts": _normalize_excerpt_entries(row["excerpts"]),
+            "openlibrary_url": f"https://openlibrary.org{row['key']}",
+            "edition_count": edition_count,
+            "best_edition": best_edition,
+            "editions": [
+                self._serialize_edition_row(edition_row)
+                for edition_row in edition_rows
+            ],
+        }
+
+    def resolve_book_entry(
+        self,
+        work_key: str | None = None,
+        title: str | None = None,
+        authors: list[str] | None = None,
+        edition_limit: int = 12,
+    ) -> dict[str, Any] | None:
+        """Resolve a local book entry by work key or title/author hint."""
+        if work_key:
+            return self.get_book_entry(work_key, edition_limit=edition_limit)
+
+        if not title:
+            return None
+
+        author_hint = None
+        if authors:
+            for author in authors:
+                if author and author.strip():
+                    author_hint = author.strip()
+                    break
+
+        match = self.match_title(title, author_hint=author_hint)
+        if match is None:
+            return None
+
+        resolved_key = str((match.raw_doc or {}).get("key") or "").strip()
+        if not resolved_key:
+            return None
+
+        return self.get_book_entry(resolved_key, edition_limit=edition_limit)
 
     def match_title(
         self,
@@ -794,6 +1036,7 @@ class LocalBookSearch:
 
         stages["result"] = {
             "matched": decision is not None,
+            "work_key": best["work_key"] if decision is not None else None,
             "decision": decision,
             "confidence": round(best_score, 4),
             "matched_title": best["title"],

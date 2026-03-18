@@ -1,4 +1,5 @@
 import { useState, useRef } from 'react';
+import BookEntryLink from '../components/BookEntryLink';
 import ModelPicker from '../components/ModelPicker';
 import { useAgentModelConfig } from '../hooks/useAgentModelConfig';
 import './PhotoImport.css';
@@ -7,6 +8,7 @@ interface IdentifiedBook {
   extracted_title: string | null;
   extracted_author: string | null;
   matched_title: string | null;
+  work_key?: string | null;
   matched_authors: string[];
   year: number | null;
   confidence: number;
@@ -244,7 +246,17 @@ export default function PhotoImport() {
                   </div>
                   {book.matched_title ? (
                     <>
-                      <div className="photo-result-matched">{book.matched_title}</div>
+                      <div className="photo-result-matched">
+                        <BookEntryLink
+                          entryRef={{
+                            workKey: book.work_key,
+                            title: book.matched_title,
+                            authors: book.matched_authors,
+                          }}
+                        >
+                          {book.matched_title}
+                        </BookEntryLink>
+                      </div>
                       <div className="photo-result-meta">
                         {book.matched_authors.length > 0 && (
                           <span>{book.matched_authors.join(', ')}</span>

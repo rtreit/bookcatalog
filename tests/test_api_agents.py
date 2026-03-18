@@ -208,6 +208,7 @@ class TestAnalyzePhotoEndpoint:
                 "extracted_title": "Dune",
                 "extracted_author": "Frank Herbert",
                 "matched_title": "Dune",
+                "work_key": "/works/OL123W",
                 "matched_authors": ["Frank Herbert"],
                 "year": 1965,
                 "confidence": 0.95,
@@ -227,6 +228,7 @@ class TestAnalyzePhotoEndpoint:
         assert data["total_matched"] == 1
         assert data["model"] == "gpt-4.1"
         assert data["books"][0]["matched_title"] == "Dune"
+        assert data["books"][0]["work_key"] == "/works/OL123W"
         mock_vision.assert_awaited_once_with(
             b"\xff\xd8\xff\xe0test",
             media_type="image/jpeg",
@@ -241,6 +243,7 @@ class TestAnalyzePhotoEndpoint:
                 "extracted_title": "Dune",
                 "extracted_author": "Frank Herbert",
                 "matched_title": "Dune",
+                "work_key": "/works/OL123W",
                 "matched_authors": ["Frank Herbert"],
                 "year": 1965,
                 "confidence": 0.95,

@@ -189,6 +189,8 @@ def match_book(title: str, author: str | None = None) -> str:
         parts.append(f"Editions: {match.edition_count}")
 
     raw_doc = match.raw_doc or {}
+    if raw_doc.get("key"):
+        parts.append(f"Work key: {raw_doc['key']}")
     parts.extend(_format_match_metadata(raw_doc))
     return " | ".join(parts)
 

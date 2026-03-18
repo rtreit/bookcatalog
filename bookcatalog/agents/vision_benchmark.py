@@ -344,6 +344,7 @@ def _evaluate_case(case: dict[str, Any], books: list[dict[str, Any]]) -> dict[st
                 "extracted_title": prediction.get("extracted_title"),
                 "extracted_author": prediction.get("extracted_author"),
                 "matched_title": prediction.get("matched_title"),
+                "work_key": prediction.get("work_key"),
                 "matched_authors": prediction.get("matched_authors", []),
                 "notes": prediction.get("notes", ""),
             },
@@ -353,6 +354,7 @@ def _evaluate_case(case: dict[str, Any], books: list[dict[str, Any]]) -> dict[st
         {
             "extracted_title": books[index].get("extracted_title"),
             "matched_title": books[index].get("matched_title"),
+            "work_key": books[index].get("work_key"),
             "notes": books[index].get("notes", ""),
         }
         for index in unused_predictions
