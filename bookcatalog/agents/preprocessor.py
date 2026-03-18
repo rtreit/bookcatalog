@@ -65,6 +65,10 @@ When handling a list classification task:
    - "confidence"
    - "decision"
    - "reason"
+4. Formatting requirements for classification JSON:
+   - "authors" must always be an array of strings, even for one author.
+   - "year" must be an integer or null.
+   - "confidence" must be a numeric value between 0 and 1.
 
 For non-classification conversation, do not include JSON unless structured results would clearly help.
 Do not invent tool results. Ground catalog-specific claims in the available tools when needed."""
@@ -243,6 +247,179 @@ def _extract_text_response(content: str) -> str:
     return text
 
 
+_CONFIDENCE_WORDS: dict[str, float] = {
+    "very_high": 0.98,
+    "high": 0.9,
+    "medium": 0.65,
+    "low": 0.35,
+    "very_low": 0.15,
+    "unknown": 0.0,
+}
+
+
+def _coerce_text(value: Any) -> str | None:
+    """Normalize a free-form value into stripped text."""
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _normalize_decision(value: Any) -> str | None:
+    """Normalize decision labels returned by different models."""
+    text = _coerce_text(value)
+    if not text:
+        return None
+
+    normalized = re.sub(r"[\s-]+", "_", text.lower()).strip("_")
+    mapping = {
+        "book": "book",
+        "likely": "likely_book",
+        "likely_book": "likely_book",
+        "not_a_book": "not_a_book",
+        "not_book": "not_a_book",
+        "notabook": "not_a_book",
+        "non_book": "not_a_book",
+        "nonbook": "not_a_book",
+        "unknown": "unknown",
+        "error": "error",
+    }
+    return mapping.get(normalized)
+
+
+def _coerce_is_book(value: Any, decision: str | None) -> bool | None:
+    """Normalize book classification booleans."""
+    if isinstance(value, bool):
+        return value
+
+    text = _coerce_text(value)
+    if text:
+        normalized = re.sub(r"[\s-]+", "_", text.lower()).strip("_")
+        if normalized in {"true", "yes", "1", "book", "likely_book"}:
+            return True
+        if normalized in {"false", "no", "0", "not_a_book", "non_book", "nonbook"}:
+            return False
+
+    if decision in {"book", "likely_book"}:
+        return True
+    if decision == "not_a_book":
+        return False
+    return None
+
+
+def _coerce_authors(value: Any) -> list[str]:
+    """Normalize author values into a list of strings."""
+    if value is None:
+        return []
+
+    if isinstance(value, list):
+        authors: list[str] = []
+        for item in value:
+            if isinstance(item, dict):
+                text = _coerce_text(
+                    item.get("name") or item.get("author") or item.get("value")
+                )
+            else:
+                text = _coerce_text(item)
+            if text:
+                authors.append(text)
+        return authors
+
+    if isinstance(value, dict):
+        text = _coerce_text(value.get("name") or value.get("author") or value.get("value"))
+        return [text] if text else []
+
+    text = _coerce_text(value)
+    return [text] if text else []
+
+
+def _coerce_year(value: Any) -> int | None:
+    """Normalize year-like values into integers."""
+    if value is None or isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        year = int(value)
+        return year if 1000 <= year <= 2100 else None
+
+    text = _coerce_text(value)
+    if not text:
+        return None
+
+    match = re.search(r"\b(1[0-9]{3}|20[0-9]{2}|2100)\b", text)
+    return int(match.group(1)) if match else None
+
+
+def _normalize_confidence_number(value: float) -> float:
+    """Clamp confidence values into the 0-1 range."""
+    if value > 1.0 and value <= 100.0:
+        value /= 100.0
+    return max(0.0, min(value, 1.0))
+
+
+def _coerce_confidence(value: Any) -> float:
+    """Normalize confidence values across model-specific formats."""
+    if value is None or isinstance(value, bool):
+        return 0.0
+    if isinstance(value, (int, float)):
+        return _normalize_confidence_number(float(value))
+
+    text = _coerce_text(value)
+    if not text:
+        return 0.0
+
+    normalized = re.sub(r"[\s-]+", "_", text.lower()).strip("_")
+    if normalized in _CONFIDENCE_WORDS:
+        return _CONFIDENCE_WORDS[normalized]
+
+    percent_match = re.search(r"[-+]?\d*\.?\d+\s*%", text)
+    if percent_match:
+        number = float(percent_match.group(0).replace("%", "").strip())
+        return _normalize_confidence_number(number)
+
+    number_match = re.search(r"[-+]?\d*\.?\d+", text)
+    if number_match:
+        return _normalize_confidence_number(float(number_match.group(0)))
+
+    return 0.0
+
+
+def normalize_classified_result(
+    result: Any,
+    fallback_input: str = "",
+) -> dict[str, Any]:
+    """Normalize parsed classification data into the API contract."""
+    raw = result if isinstance(result, dict) else {}
+    normalized_decision = _normalize_decision(raw.get("decision"))
+    is_book = _coerce_is_book(raw.get("is_book"), normalized_decision)
+    if normalized_decision is None:
+        if is_book is True:
+            normalized_decision = "book"
+        elif is_book is False:
+            normalized_decision = "not_a_book"
+        else:
+            normalized_decision = "unknown"
+    if is_book is None:
+        if normalized_decision in {"book", "likely_book"}:
+            is_book = True
+        elif normalized_decision == "not_a_book":
+            is_book = False
+
+    return {
+        "input": _coerce_text(raw.get("input")) or fallback_input,
+        "is_book": is_book,
+        "title": _coerce_text(
+            raw.get("title") or raw.get("matched_title") or raw.get("extracted_title")
+        ),
+        "authors": _coerce_authors(raw.get("authors", raw.get("author"))),
+        "year": _coerce_year(raw.get("year", raw.get("first_publish_year"))),
+        "confidence": _coerce_confidence(raw.get("confidence")),
+        "decision": normalized_decision,
+        "reason": _coerce_text(raw.get("reason")) or "",
+    }
+
+
 def _parse_response(
     content: str, original_items: list[str]
 ) -> list[dict[str, Any]]:
@@ -258,7 +435,15 @@ def _parse_response(
     try:
         parsed = json.loads(text)
         if isinstance(parsed, list):
-            return parsed
+            return [
+                normalize_classified_result(
+                    item,
+                    fallback_input=(
+                        original_items[index] if index < len(original_items) else ""
+                    ),
+                )
+                for index, item in enumerate(parsed)
+            ]
     except json.JSONDecodeError:
         logger.warning("Failed to parse agent response as JSON: %s", text[:200])
 

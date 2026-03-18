@@ -107,7 +107,10 @@ class PhotoBenchmarkRequest(BaseModel):
 @router.post("/chat", response_model=ChatResponse)
 async def agent_chat(request: ChatRequest) -> ChatResponse:
     """Chat with the conversational book assistant."""
-    from bookcatalog.agents.preprocessor import run_preprocessor
+    from bookcatalog.agents.preprocessor import (
+        normalize_classified_result,
+        run_preprocessor,
+    )
     from bookcatalog.agents.config import PREPROCESSOR_MODEL
 
     selected_model = request.model or PREPROCESSOR_MODEL
@@ -141,16 +144,17 @@ async def agent_chat(request: ChatRequest) -> ChatResponse:
 
     classified = []
     for r in response.get("results", []):
+        normalized = normalize_classified_result(r)
         classified.append(
             ClassifiedItem(
-                input=r.get("input", ""),
-                is_book=r.get("is_book"),
-                title=r.get("title"),
-                authors=r.get("authors", []),
-                year=r.get("year"),
-                confidence=r.get("confidence", 0.0),
-                decision=r.get("decision", "unknown"),
-                reason=r.get("reason", ""),
+                input=normalized["input"],
+                is_book=normalized["is_book"],
+                title=normalized["title"],
+                authors=normalized["authors"],
+                year=normalized["year"],
+                confidence=normalized["confidence"],
+                decision=normalized["decision"],
+                reason=normalized["reason"],
             )
         )
 

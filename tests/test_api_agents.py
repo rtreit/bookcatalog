@@ -136,6 +136,39 @@ class TestChatEndpoint:
         )
 
     @patch("bookcatalog.agents.preprocessor.run_preprocessor", new_callable=AsyncMock)
+    def test_chat_normalizes_model_variation_fields(
+        self, mock_preprocessor: AsyncMock
+    ) -> None:
+        """Chat endpoint does not 500 when the model returns non-canonical types."""
+        mock_preprocessor.return_value = {
+            "raw_response": "Found two books.",
+            "results": [
+                {
+                    "input": "Irish Fairy Tales and Folklore",
+                    "is_book": "yes",
+                    "title": "Irish Fairy Tales and Folklore",
+                    "authors": "W. B. Yeats",
+                    "year": "1888",
+                    "confidence": "high",
+                    "decision": "book",
+                    "reason": "Matched in catalog",
+                }
+            ],
+        }
+
+        response = client.post("/api/agents/chat", json={
+            "message": "which are books?\nIrish Fairy Tales and Folklore",
+            "model": "gpt-4.1",
+        })
+
+        assert response.status_code == 200
+        data = response.json()
+        assert data["model"] == "gpt-4.1"
+        assert data["results"][0]["authors"] == ["W. B. Yeats"]
+        assert data["results"][0]["confidence"] == 0.9
+        assert data["results"][0]["year"] == 1888
+
+    @patch("bookcatalog.agents.preprocessor.run_preprocessor", new_callable=AsyncMock)
     def test_chat_agent_error(self, mock_preprocessor: AsyncMock) -> None:
         """Chat endpoint handles agent errors gracefully."""
         mock_preprocessor.side_effect = RuntimeError("API key expired")

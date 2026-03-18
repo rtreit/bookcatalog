@@ -77,6 +77,36 @@ class TestParseResponse:
         assert result[0]["is_book"] is True
         assert result[1]["is_book"] is False
 
+    def test_parse_response_normalizes_model_variations(self) -> None:
+        """String-like fields from the model are normalized for the API."""
+        content = json.dumps([
+            {
+                "input": "Irish Fairy Tales and Folklore",
+                "is_book": "yes",
+                "title": "Irish Fairy Tales and Folklore",
+                "authors": "W. B. Yeats",
+                "year": "1888",
+                "confidence": "high",
+                "decision": "book",
+                "reason": "Catalog match found",
+            },
+        ])
+
+        result = _parse_response(content, ["Irish Fairy Tales and Folklore"])
+
+        assert result == [
+            {
+                "input": "Irish Fairy Tales and Folklore",
+                "is_book": True,
+                "title": "Irish Fairy Tales and Folklore",
+                "authors": ["W. B. Yeats"],
+                "year": 1888,
+                "confidence": 0.9,
+                "decision": "book",
+                "reason": "Catalog match found",
+            }
+        ]
+
 
 class TestPreprocessorAgent:
     """Tests for run_preprocessor input normalization and response handling."""
@@ -255,3 +285,37 @@ class TestPreprocessorAgent:
         assert len(response["results"]) == 2
         assert response["results"][0]["title"] == "Dune"
         assert response["results"][1]["decision"] == "not_a_book"
+
+    @pytest.mark.asyncio
+    async def test_invoke_agent_normalizes_confidence_words(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Model-specific labels like 'high' are normalized before returning."""
+
+        class FakeMessage:
+            def __init__(self, content: str) -> None:
+                self.content = content
+
+        fake_agent = AsyncMock()
+        fake_agent.ainvoke.return_value = {
+            "messages": [
+                FakeMessage(
+                    "Found likely books.\n\n```json\n"
+                    '[{"input":"Boy in a China Shop: Life, Clay and Everything (-)",'
+                    '"is_book":"yes","title":"Boy in a China Shop","authors":"Mark Shapiro",'
+                    '"year":"2000","confidence":"high","decision":"book","reason":"Matched"}]'
+                    "\n```"
+                ),
+            ],
+        }
+
+        monkeypatch.setattr(preprocessor, "create_agent", lambda *args, **kwargs: fake_agent)
+
+        response = await preprocessor._invoke_agent(
+            model=object(),
+            tools=[],
+            messages=[{"role": "user", "content": "Boy in a China Shop: Life, Clay and Everything (-)"}],
+        )
+
+        assert response["results"][0]["confidence"] == 0.9
+        assert response["results"][0]["authors"] == ["Mark Shapiro"]
